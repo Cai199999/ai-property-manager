@@ -92,15 +92,8 @@ result_df = pd.DataFrame(
     ]
 )
 
-推荐结构（确有 manifest 外键时）：
-orders = tables["工单表_A区"]
-projects = tables["项目表"]
-merged = orders.merge(
-    projects[["项目编号", "所属区域"]],
-    on="项目编号",
-    how="left",
-    validate="many_to_one",
-)
+只有当 relationships 中存在 source=manifest 的条目时，才允许按声明的键 merge；
+当前数据没有 manifest 外键时不要臆造维表或连接键。
 """
 
 # 只对样例中的直接标识信息做遮罩，列本身仍会出现在表结构里。
