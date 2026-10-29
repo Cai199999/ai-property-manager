@@ -213,7 +213,7 @@
 
     .query-form {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 220px auto auto auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       align-items: end;
       gap: 12px;
     }
@@ -231,8 +231,7 @@
       letter-spacing: 0.03em;
     }
 
-    .query-input,
-    .query-select {
+    .query-input {
       width: 100%;
       min-height: 42px;
       padding: 0 13px;
@@ -249,13 +248,11 @@
       color: var(--text-muted);
     }
 
-    .query-input:hover,
-    .query-select:hover {
+    .query-input:hover {
       border-color: var(--text-muted);
     }
 
     .query-input:focus-visible,
-    .query-select:focus-visible,
     .query-button:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
@@ -284,6 +281,16 @@
       opacity: 0.68;
     }
 
+    /* 主操作：比次要按钮更高更宽，承担页面唯一的提交入口。 */
+    .query-button--start {
+      min-height: 46px;
+      padding: 0 38px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 26%, transparent);
+    }
+
     .query-button--secondary {
       border-color: var(--hairline);
       background: transparent;
@@ -301,13 +308,36 @@
       border-top: 1px solid var(--hairline);
     }
 
+    .table-catalog-empty {
+      margin: 9px 0 0;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .table-catalog-empty[hidden] {
+      display: none;
+    }
+
+    /* 表数量不设上限：超出容器宽度时横向滚动，避免把页面撑破。 */
     .table-catalog-list {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 8px;
       margin: 9px 0 0;
-      padding: 0;
+      padding: 0 0 6px;
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: thin;
+      overscroll-behavior-x: contain;
       list-style: none;
+    }
+
+    .table-catalog-list[hidden] {
+      display: none;
+    }
+
+    .table-catalog-list > li {
+      flex: 0 0 auto;
     }
 
     .table-chip {
@@ -338,11 +368,6 @@
     .table-chip strong {
       color: var(--text-primary);
       font-weight: 650;
-    }
-
-    .table-chip.is-primary {
-      border-color: var(--accent);
-      background: var(--accent-wash);
     }
 
     .table-chip .table-chip-role {
@@ -426,15 +451,8 @@
 
     .query-feedback[hidden],
     .query-warnings[hidden],
-    .empty-state[hidden],
-    #resultsRoot[hidden] {
+    .empty-state[hidden] {
       display: none;
-    }
-
-    .chart-card.is-refreshing .chart-layout,
-    .chart-card.is-refreshing .chart-footnote {
-      opacity: 0.45;
-      transition: opacity 180ms ease;
     }
 
     .stats {
@@ -872,11 +890,14 @@
       }
 
       .query-form {
-        grid-template-columns: minmax(0, 1fr) 180px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .query-field {
+        grid-column: 1 / -1;
       }
 
       .query-button {
-        grid-column: 1 / -1;
         width: 100%;
       }
 
@@ -1003,10 +1024,6 @@
         <button class="tool-button" id="textureButton" type="button" aria-pressed="false">
           纹理辅助
         </button>
-        <button class="tool-button" id="tableButton" type="button" aria-expanded="false"
-                aria-controls="tableCard">
-          数据表
-        </button>
         <button class="tool-button" id="themeButton" type="button">
           深色模式
         </button>
@@ -1019,26 +1036,11 @@
           <div class="query-field">
             <label class="query-label" for="queryInput">自然语言查询</label>
             <input class="query-input" id="queryInput" name="message" type="text"
-                   placeholder="例如：汇总上个月望京国际研发园的工单数据"
+                   placeholder="例如：汇总所有区域的总工单量和总金额"
                    autocomplete="off" maxlength="500" enterkeyhint="send">
           </div>
-          <div class="query-field">
-            <label class="query-label" for="queryProject">项目</label>
-            <select class="query-select" id="queryProject" name="property_name">
-              <option value="">全部项目</option>
-              <option value="望京国际研发园">望京国际研发园</option>
-              <option value="望京生命科学园">望京生命科学园</option>
-              <option value="望京科技园">望京科技园</option>
-              <option value="望京数字创意园">望京数字创意园</option>
-              <option value="望京未来信息园">望京未来信息园</option>
-              <option value="慧谷时空">慧谷时空</option>
-              <option value="金色家园">金色家园</option>
-              <option value="东湖街道办事处">东湖街道办事处</option>
-            </select>
-          </div>
-          <button class="query-button" id="queryButton" type="submit">查询</button>
-          <button class="query-button query-button--secondary" id="analyzeButton"
-                  type="button" title="多表联查并生成动态结果">智能分析</button>
+          <button class="query-button query-button--start" id="startButton" type="submit"
+                  title="按自然语言智能分析当前数据表">开始</button>
           <button class="query-button query-button--secondary" id="uploadButton"
                   type="button" title="可多选导入 .xlsx 文件，合计最大 20 MB">导入文件</button>
           <input id="uploadInput" type="file" multiple
@@ -1046,8 +1048,9 @@
         </form>
         <p class="query-status upload-status" id="uploadStatus" role="status"
            aria-live="polite" hidden></p>
-        <div class="table-catalog" id="tableCatalog" hidden>
+        <div class="table-catalog" id="tableCatalog">
           <p class="query-label">当前数据表</p>
+          <p class="table-catalog-empty" id="tableCatalogEmpty">请先点击右上角导入文件</p>
           <ul class="table-catalog-list" id="tableCatalogList"></ul>
         </div>
         <div class="query-feedback" id="queryFeedback" hidden>
@@ -1090,70 +1093,7 @@
         </div>
       </section>
 
-      <div class="empty-state" id="emptyState">请输入自然语言开始查询</div>
-
-      <div id="resultsRoot" hidden>
-      <section class="stats" aria-label="关键指标">
-        <article class="stat-card">
-          <p class="stat-label">工单总量</p>
-          <p class="stat-value"><span id="statTotal">—</span><span class="stat-unit">单</span></p>
-          <p class="stat-note" id="statTotalNote">查询期内全部工单</p>
-        </article>
-        <article class="stat-card">
-          <p class="stat-label">费用合计</p>
-          <p class="stat-value" id="statAmount">—</p>
-          <p class="stat-note">已受理工单累计金额</p>
-        </article>
-        <article class="stat-card">
-          <p class="stat-label">完成率</p>
-          <p class="stat-value" id="statCompletion">—</p>
-          <p class="stat-note" id="statCompletionNote">已完成 / 全部工单</p>
-        </article>
-        <article class="stat-card">
-          <p class="stat-label">平均满意度</p>
-          <p class="stat-value"><span id="statSatisfaction">—</span><span class="stat-unit">/ 5</span></p>
-          <p class="stat-note">基于已回访工单</p>
-        </article>
-      </section>
-
-      <section class="card chart-card" id="chartCard" aria-labelledby="chartTitle">
-        <div class="card-head">
-          <div>
-            <p class="kicker">报修类型</p>
-            <h2 id="chartTitle">工单量分布</h2>
-            <p class="card-subtitle">按工单量占总量的比例，所选时间段内共 <span id="chartTotal">—</span> 单。</p>
-          </div>
-          <span class="source-badge" id="sourceBadge">RPA 数据源</span>
-        </div>
-
-        <div class="chart-layout">
-          <div class="chart" id="repairChart" role="img" aria-label="报修类型工单量饼图"></div>
-          <div class="legend" id="repairLegend" aria-label="报修类型图例"></div>
-        </div>
-
-        <div class="chart-footnote">
-          <span id="chartInsight">—</span>
-          <span>悬停图表可查看数量与费用</span>
-        </div>
-      </section>
-
-      <section class="card table-card" id="tableCard" hidden aria-labelledby="tableTitle">
-        <div class="table-scroll">
-          <table>
-            <caption id="tableTitle">报修类型明细</caption>
-            <thead>
-              <tr>
-                <th scope="col">报修类型</th>
-                <th scope="col">工单量</th>
-                <th scope="col">占比</th>
-                <th scope="col">费用合计</th>
-              </tr>
-            </thead>
-            <tbody id="tableBody"></tbody>
-          </table>
-        </div>
-      </section>
-      </div>
+      <div class="empty-state" id="emptyState">请输入自然语言，点击“开始”进行智能分析</div>
 
       <section class="card dynamic-card" id="dynamicCard" hidden aria-labelledby="dynamicTitle">
         <div class="card-head">
@@ -1197,24 +1137,14 @@
     (() => {
       "use strict";
 
-      let data = null;
       const root = document.documentElement;
       const themeButton = document.getElementById("themeButton");
       const textureButton = document.getElementById("textureButton");
-      const tableButton = document.getElementById("tableButton");
-      const tableCard = document.getElementById("tableCard");
-      const tableBody = document.getElementById("tableBody");
-      const legendRoot = document.getElementById("repairLegend");
-      const chartElement = document.getElementById("repairChart");
-      const chartCard = document.getElementById("chartCard");
       const emptyState = document.getElementById("emptyState");
-      const resultsRoot = document.getElementById("resultsRoot");
       const errorState = document.getElementById("errorState");
       const queryForm = document.getElementById("queryForm");
       const queryInput = document.getElementById("queryInput");
-      const queryProject = document.getElementById("queryProject");
-      const queryButton = document.getElementById("queryButton");
-      const analyzeButton = document.getElementById("analyzeButton");
+      const startButton = document.getElementById("startButton");
       const queryFeedback = document.getElementById("queryFeedback");
       const queryStatus = document.getElementById("queryStatus");
       const queryError = document.getElementById("queryError");
@@ -1224,8 +1154,8 @@
       const uploadButton = document.getElementById("uploadButton");
       const uploadInput = document.getElementById("uploadInput");
       const uploadStatus = document.getElementById("uploadStatus");
-      const tableCatalog = document.getElementById("tableCatalog");
       const tableCatalogList = document.getElementById("tableCatalogList");
+      const tableCatalogEmpty = document.getElementById("tableCatalogEmpty");
       const tablePreviewCard = document.getElementById("tablePreviewCard");
       const tablePreviewTitle = document.getElementById("tablePreviewTitle");
       const tablePreviewSubtitle = document.getElementById("tablePreviewSubtitle");
@@ -1249,9 +1179,7 @@
       // 所有浏览器请求只发往 Java 网关，Python 8000 仅对 Java 可见。
       const gatewayOrigin = "http://127.0.0.1:8080";
       const apiBase = `${gatewayOrigin}/api/v1/assistant`;
-      const queryEndpoint = `${apiBase}/query`;
       const codeQueryEndpoint = `${apiBase}/query/code`;
-      const tableEndpoint = `${apiBase}/tables`;
       const tablePreviewEndpoint = `${apiBase}/tables/preview`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
       const previewPageSize = 50;
@@ -1259,28 +1187,14 @@
       // 与网关 gateway.agent.upload-max-files、后端 TABLE_UPLOAD_MAX_FILES 保持一致。
       const maxUploadFiles = 10;
       const maxDynamicRows = 200;
-      const emptyPrompt = "请输入自然语言开始查询";
-      const emptyResultMessage = "该时间范围内没有符合条件的工单";
-      const projectNames = Object.freeze([
-        "望京国际研发园",
-        "望京生命科学园",
-        "望京科技园",
-        "望京数字创意园",
-        "望京未来信息园",
-        "慧谷时空",
-        "金色家园",
-        "东湖街道办事处"
-      ]);
-      const projectNamesByLength = [...projectNames].sort((left, right) => right.length - left.length);
+      const emptyPrompt = "请输入自然语言，点击“开始”进行智能分析";
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const colorMedia = window.matchMedia("(prefers-color-scheme: dark)");
       const contrastMedia = window.matchMedia("(prefers-contrast: more)");
       const themeStorageKey = "assistant-theme";
-      let chart = null;
       let dynamicChart = null;
       let dynamicPayload = null;
       let textureEnabled = contrastMedia.matches;
-      let projectManuallySelected = false;
       let isQuerying = false;
       let isUploading = false;
       let previewAbortController = null;
@@ -1290,14 +1204,10 @@
         totalRows: 0,
         hasMore: false
       };
+      // 只记录本次会话中用户导入的表；页面首次加载不预置任何表。
+      const uploadedTables = new Map();
 
       const numberFormatter = new Intl.NumberFormat("zh-CN");
-      const currencyFormatter = new Intl.NumberFormat("zh-CN", {
-        style: "currency",
-        currency: "CNY",
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
 
       const escapeHtml = (value) => String(value)
         .replaceAll("&", "&amp;")
@@ -1330,9 +1240,6 @@
         if (persist) {
           localStorage.setItem(themeStorageKey, theme);
         }
-        if (chart) {
-          renderChart();
-        }
         if (dynamicChart) {
           renderDynamicChart();
         }
@@ -1350,151 +1257,6 @@
           rotation: (index % 2 === 0 ? 1 : -1) * Math.PI / 4,
           color: isDark() ? "rgba(240, 239, 236, 0.48)" : "rgba(11, 11, 11, 0.34)"
         };
-      };
-
-      const tooltipFormatter = (params) => {
-        const item = itemByName.get(params.name);
-        if (!item) {
-          return "";
-        }
-        const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
-        return `
-          <div style="min-width:160px">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
-              <span style="width:8px;height:8px;border-radius:2px;background:${params.color}"></span>
-              <strong style="font-size:13px">${escapeHtml(item.name)}</strong>
-            </div>
-            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
-              <span>工单量</span><span>${numberFormatter.format(item.count)} 单</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
-              <span>占比</span><span>${share}%</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
-              <span>费用合计</span><span>${escapeHtml(currencyFormatter.format(item.amount))}</span>
-            </div>
-          </div>
-        `;
-      };
-
-      let totalRecords = 0;
-      let itemByName = new Map();
-
-      const renderChart = () => {
-        if (!chart) {
-          return;
-        }
-        const colors = seriesColors();
-        const textPrimary = cssValue("--text-primary");
-        const textMuted = cssValue("--text-muted");
-        const surface = cssValue("--surface");
-        const hairline = cssValue("--hairline");
-        const fontFamily = cssValue("--font-sans").replace(/\s+/g, " ");
-
-        chart.setOption({
-          animation: !reduceMotion,
-          animationDuration: 600,
-          animationEasing: "cubicOut",
-          textStyle: { fontFamily },
-          tooltip: {
-            trigger: "item",
-            confine: true,
-            backgroundColor: surface,
-            borderColor: hairline,
-            borderWidth: 1,
-            padding: 12,
-            textStyle: { color: textPrimary, fontFamily, fontSize: 12 },
-            extraCssText: "border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.14);",
-            formatter: tooltipFormatter
-          },
-          series: [{
-            name: "报修类型",
-            type: "pie",
-            radius: ["55%", "78%"],
-            center: ["50%", "50%"],
-            minAngle: 2,
-            padAngle: 1.5,
-            itemStyle: {
-              borderColor: surface,
-              borderWidth: 2,
-              borderRadius: 4
-            },
-            label: { show: false },
-            labelLine: { show: false },
-            emphasis: {
-              scale: true,
-              scaleSize: 7,
-              itemStyle: { shadowBlur: 18, shadowColor: "rgba(0,0,0,0.16)" }
-            },
-            data: repairTypes.map((item, index) => ({
-              name: item.name,
-              value: item.count,
-              itemStyle: {
-                color: colors[index],
-                decal: decalFor(index)
-              }
-            }))
-          }],
-          graphic: [
-            {
-              type: "text",
-              left: "center",
-              top: "39%",
-              style: {
-                text: numberFormatter.format(totalRecords),
-                fill: textPrimary,
-                fontFamily,
-                fontSize: 44,
-                fontWeight: 600,
-                textAlign: "center"
-              }
-            },
-            {
-              type: "text",
-              left: "center",
-              top: "56%",
-              style: {
-                text: "工单总量",
-                fill: textMuted,
-                fontFamily,
-                fontSize: 12,
-                fontWeight: 500,
-                textAlign: "center"
-              }
-            }
-          ]
-        }, true);
-      };
-
-      const renderLegend = () => {
-        legendRoot.innerHTML = "";
-        repairTypes.forEach((item, index) => {
-          const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
-          const row = document.createElement("div");
-          row.className = "legend-item";
-          row.style.setProperty("--legend-color", `var(--series-${index + 1})`);
-          row.innerHTML = `
-            <span class="legend-dot" aria-hidden="true"></span>
-            <span class="legend-name">${escapeHtml(item.name)}</span>
-            <span class="legend-count">${numberFormatter.format(item.count)} 单</span>
-            <span class="legend-share">${share}%</span>
-          `;
-          legendRoot.appendChild(row);
-        });
-      };
-
-      const renderTable = () => {
-        tableBody.innerHTML = repairTypes.map((item, index) => {
-          const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
-          return `
-            <tr>
-              <td><span class="table-color" style="--legend-color:var(--series-${index + 1})" aria-hidden="true"></span>${escapeHtml(item.name)}</td>
-              <td>${numberFormatter.format(item.count)} 单</td>
-              <td>${share}%</td>
-              <td>${escapeHtml(currencyFormatter.format(item.amount))}</td>
-            </tr>
-          `;
-        }).join("");
       };
 
       const dynamicCellFormatter = new Intl.NumberFormat("zh-CN", {
@@ -1730,93 +1492,11 @@
         }
       };
 
-      let repairTypes = [];
-
-      const hydrate = () => {
-        if (!data || !data.summary || !Array.isArray(data.summary.by_repair_type)) {
-          errorState.hidden = false;
-          return false;
-        }
-
-        errorState.hidden = true;
-        const summary = data.summary;
-        repairTypes = summary.by_repair_type;
-        totalRecords = summary.total_records;
-        itemByName = new Map(repairTypes.map((item) => [item.name, item]));
-
-        const projects = (summary.by_project || []).map((item) => item.name).join("、") || "全部项目";
-        const start = formatDate(data.time_range.start_date);
-        const end = formatDate(data.time_range.end_date);
-
-        document.getElementById("pageSubtitle").innerHTML =
-          `<strong>${escapeHtml(projects)}</strong> · ${start} — ${end} · ${numberFormatter.format(totalRecords)} 单`;
-        document.getElementById("chartTotal").textContent = numberFormatter.format(totalRecords);
-        document.getElementById("statTotal").textContent = numberFormatter.format(totalRecords);
-        document.getElementById("statAmount").textContent = currencyFormatter.format(summary.total_amount);
-        document.getElementById("statCompletion").textContent = `${(summary.completion_rate * 100).toFixed(1)}%`;
-        document.getElementById("statCompletionNote").textContent =
-          `${numberFormatter.format(summary.completed_count)} / ${numberFormatter.format(totalRecords)} 已完成`;
-        document.getElementById("statSatisfaction").textContent =
-          summary.average_satisfaction == null ? "—" : summary.average_satisfaction.toFixed(2);
-        document.getElementById("statTotalNote").textContent =
-          `${Math.round((new Date(end.replaceAll(".", "-")) - new Date(start.replaceAll(".", "-"))) / 86400000) + 1} 天查询区间`;
-        document.getElementById("sourceBadge").textContent =
-          `${(data.data_source || "rpa").toUpperCase()} 数据源`;
-
-        const top = repairTypes[0];
-        if (top) {
-          const share = totalRecords > 0 ? (top.count / totalRecords * 100).toFixed(1) : "0.0";
-          const topTwoShare = totalRecords > 0
-            ? ((top.count + (repairTypes[1]?.count || 0)) / totalRecords * 100).toFixed(1)
-            : "0.0";
-          document.getElementById("chartInsight").innerHTML =
-            `<strong>${escapeHtml(top.name)}</strong> 最多，占 ${share}%；前两类合计占 ${topTwoShare}%。`;
-        }
-
-        renderLegend();
-        renderTable();
-        return true;
-      };
-
-      const initChart = () => {
-        if (!window.echarts) {
-          errorState.hidden = false;
-          errorState.textContent = "ECharts 未加载，请检查 frontend/vendor/echarts.min.js。";
-          return;
-        }
-        chart = window.echarts.init(chartElement, null, { renderer: "canvas" });
-        renderChart();
-
-        if ("ResizeObserver" in window) {
-          new ResizeObserver(() => chart.resize()).observe(chartElement);
-        } else {
-          window.addEventListener("resize", () => chart.resize());
-        }
-      };
-
-      const updateChartAria = () => {
-        chartElement.setAttribute(
-          "aria-label",
-          "报修类型饼图：" + repairTypes
-            .map((item) => `${item.name}${item.count}单`)
-            .join("，")
-        );
-      };
-
       const showEmptyState = (message) => {
         emptyState.textContent = message;
         emptyState.hidden = false;
-        resultsRoot.hidden = true;
         errorState.hidden = true;
-        tableCard.hidden = true;
         dynamicCard.hidden = true;
-        tableButton.setAttribute("aria-expanded", "false");
-        tableButton.textContent = "数据表";
-      };
-
-      const showResults = () => {
-        emptyState.hidden = true;
-        resultsRoot.hidden = false;
       };
 
       const renderQueryWarnings = (warnings) => {
@@ -1870,79 +1550,9 @@
 
       const setQuerying = (loading) => {
         isQuerying = loading;
-        queryButton.disabled = loading;
-        queryButton.textContent = loading ? "查询中…" : "查询";
-        analyzeButton.disabled = loading;
-        analyzeButton.textContent = loading ? "分析中…" : "智能分析";
-        chartCard.classList.toggle("is-refreshing", loading);
-        chartCard.setAttribute("aria-busy", String(loading));
-      };
-
-      const syncProjectFromMessage = () => {
-        if (projectManuallySelected) {
-          return;
-        }
-        const matched = projectNamesByLength.find((name) => queryInput.value.includes(name));
-        queryProject.value = matched || "";
-      };
-
-      const isRenderableResponse = (payload) => Boolean(
-        payload
-        && payload.summary
-        && Array.isArray(payload.summary.by_repair_type)
-        && payload.time_range
-        && payload.time_range.start_date
-        && payload.time_range.end_date
-      );
-
-      const isEmptyResult = (payload) => Number(payload?.summary?.total_records || 0) <= 0;
-
-      const applyPayload = (payload) => {
-        data = payload;
-        updateQueryFooter(payload);
-        renderQueryWarnings(payload.meta?.warnings);
-
-        if (isEmptyResult(payload)) {
-          const project = queryProject.value || "全部项目";
-          const start = formatDate(payload.time_range.start_date);
-          const end = formatDate(payload.time_range.end_date);
-          document.getElementById("pageSubtitle").innerHTML =
-            `<strong>${escapeHtml(project)}</strong> · ${start} — ${end} · 0 单`;
-          showEmptyState(emptyResultMessage);
-          return "empty";
-        }
-
-        // ECharts 需要在容器可见时初始化，否则首次渲染宽度会是 0。
-        showResults();
-        if (!hydrate()) {
-          throw new Error("查询结果无法渲染，已保留上一次结果。");
-        }
-        if (!chart) {
-          initChart();
-        } else {
-          renderChart();
-        }
-        updateChartAria();
-        return "rendered";
-      };
-
-      const restorePreviousData = (payload) => {
-        if (!payload) {
-          data = null;
-          queryMeta.textContent = "尚未查询";
-          renderQueryWarnings([]);
-          showEmptyState(emptyPrompt);
-          return;
-        }
-
-        try {
-          applyPayload(payload);
-        } catch {
-          data = null;
-          queryMeta.textContent = "尚未查询";
-          renderQueryWarnings([]);
-          showEmptyState(emptyPrompt);
-        }
+        startButton.disabled = loading;
+        startButton.textContent = loading ? "分析中…" : "开始";
+        dynamicCard.setAttribute("aria-busy", String(loading));
       };
 
       const httpErrorMessage = (status, payload) => {
@@ -1954,13 +1564,6 @@
         }
         return payload?.error?.message || `查询失败（HTTP ${status}）`;
       };
-
-      queryInput.addEventListener("input", syncProjectFromMessage);
-
-      // 用户手动操作下拉框后，视为显式覆盖，后续输入不再自动改写项目。
-      queryProject.addEventListener("change", () => {
-        projectManuallySelected = true;
-      });
 
       const showUploadStatus = (message, kind) => {
         uploadStatus.textContent = message;
@@ -1974,10 +1577,13 @@
         uploadButton.textContent = value ? "导入中…" : "导入文件";
       };
 
-      const renderTableCatalog = (tables, primaryTable) => {
-        if (!Array.isArray(tables) || tables.length === 0) {
-          tableCatalog.hidden = true;
+      // 目录只来自本次会话导入的表；不预置磁盘上的历史表，也不强制选中任何一项。
+      const renderTableCatalog = () => {
+        const tables = [...uploadedTables.values()];
+        if (tables.length === 0) {
           tableCatalogList.replaceChildren();
+          tableCatalogList.hidden = true;
+          tableCatalogEmpty.hidden = false;
           return;
         }
 
@@ -1985,10 +1591,9 @@
           const roleLabel = table.role === "fact"
             ? "事实表"
             : (table.role === "dimension" ? "维表" : "数据表");
-          const primaryClass = table.name === primaryTable ? " is-primary" : "";
           return `
             <li>
-              <button class="table-chip${primaryClass}" type="button"
+              <button class="table-chip" type="button"
                       data-table-name="${escapeHtml(table.name)}"
                       title="预览 ${escapeHtml(table.name)} 的 Excel 内容">
                 <strong>${escapeHtml(table.name)}</strong>
@@ -1999,23 +1604,17 @@
             </li>
           `;
         }).join("");
-        tableCatalog.hidden = false;
+        tableCatalogList.hidden = false;
+        tableCatalogEmpty.hidden = true;
       };
 
-      const loadTableCatalog = async () => {
-        try {
-          const response = await fetch(tableEndpoint, {
-            headers: { Accept: "application/json" },
-            cache: "no-store"
-          });
-          if (!response.ok) {
-            return;
+      const rememberUploadedTables = (tables) => {
+        (Array.isArray(tables) ? tables : []).forEach((table) => {
+          if (table && typeof table.name === "string" && table.name) {
+            uploadedTables.set(table.name, table);
           }
-          const payload = await response.json();
-          renderTableCatalog(payload.tables, payload.primary_table);
-        } catch {
-          // 网关或数据目录未就绪时静默隐藏，不影响现有看板查询。
-        }
+        });
+        renderTableCatalog();
       };
 
       const showPreviewStatus = (message, kind) => {
@@ -2258,12 +1857,13 @@
           }
 
           closeTablePreview();
-          renderTableCatalog(payload.tables, payload.primary_table);
           // 新后端返回 imported_tables；兼容只返回单个 imported 的旧响应。
           const importedTables = Array.isArray(payload.imported_tables)
             && payload.imported_tables.length
             ? payload.imported_tables
             : (payload.imported ? [payload.imported] : []);
+          // 只把用户本次导入的表加入列表，不展示磁盘上的历史表。
+          rememberUploadedTables(importedTables);
           let message;
           if (importedTables.length === 1) {
             const imported = importedTables[0];
@@ -2309,7 +1909,6 @@
           return;
         }
 
-        const propertyName = queryProject.value || null;
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => controller.abort(), 95000);
 
@@ -2325,10 +1924,7 @@
               headers: {
                 "Content-Type": "application/json"
               },
-              body: JSON.stringify({
-                message,
-                property_name: propertyName
-              }),
+              body: JSON.stringify({ message }),
               signal: controller.signal
             });
           } catch (error) {
@@ -2368,91 +1964,10 @@
         }
       };
 
-      analyzeButton.addEventListener("click", () => {
-        void runDynamicQuery();
-      });
-
-      queryForm.addEventListener("submit", async (event) => {
+      // 表单提交（点击“开始”或按回车）统一走 /query/code 智能分析接口。
+      queryForm.addEventListener("submit", (event) => {
         event.preventDefault();
-        if (isQuerying) {
-          return;
-        }
-
-        const message = queryInput.value.trim();
-        if (message.length < 2) {
-          showQueryError("请输入至少 2 个字符的查询内容。");
-          queryInput.focus();
-          return;
-        }
-
-        const propertyName = queryProject.value || null;
-        const previousData = data;
-        const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), 75000);
-
-        setQuerying(true);
-        renderQueryWarnings([]);
-        showQueryStatus("正在查询，请稍候…", "loading");
-
-        try {
-          let response;
-          try {
-            response = await fetch(queryEndpoint, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json"
-              },
-              // 按接口契约只提交 message 与 property_name。
-              body: JSON.stringify({
-                message,
-                property_name: propertyName
-              }),
-              signal: controller.signal
-            });
-          } catch (error) {
-            if (error.name === "AbortError") {
-              throw error;
-            }
-            const networkError = new Error("无法连接 8080，请确认网关和 CORS");
-            networkError.name = "QueryNetworkError";
-            throw networkError;
-          }
-
-          let payload = null;
-          try {
-            payload = await response.json();
-          } catch {
-            payload = null;
-          }
-
-          if (!response.ok) {
-            throw new Error(httpErrorMessage(response.status, payload));
-          }
-
-          if (!isRenderableResponse(payload)) {
-            throw new Error("查询返回的数据结构不完整，已保留上一次结果。");
-          }
-
-          applyPayload(payload);
-          showQueryStatus(
-            `查询完成 · ${numberFormatter.format(payload.summary.total_records)} 单`,
-            "success"
-          );
-        } catch (error) {
-          // 仅当本次请求已经覆盖旧数据时才回滚，普通失败继续保留旧结果。
-          if (data !== previousData) {
-            restorePreviousData(previousData);
-          }
-
-          if (error.name === "AbortError") {
-            showQueryError("查询超时，请稍后重试。");
-          } else {
-            showQueryError(error.message || "查询失败，请稍后重试。");
-          }
-        } finally {
-          window.clearTimeout(timeoutId);
-          setQuerying(false);
-        }
+        void runDynamicQuery();
       });
 
       const initialiseTheme = () => {
@@ -2470,17 +1985,9 @@
       textureButton.addEventListener("click", () => {
         textureEnabled = !textureEnabled;
         textureButton.setAttribute("aria-pressed", String(textureEnabled));
-        renderChart();
-      });
-
-      tableButton.addEventListener("click", () => {
-        if (resultsRoot.hidden) {
-          return;
+        if (dynamicChart) {
+          renderDynamicChart();
         }
-        const willOpen = tableCard.hidden;
-        tableCard.hidden = !willOpen;
-        tableButton.setAttribute("aria-expanded", String(willOpen));
-        tableButton.textContent = willOpen ? "收起数据表" : "数据表";
       });
 
       colorMedia.addEventListener("change", (event) => {
@@ -2492,7 +1999,9 @@
       contrastMedia.addEventListener("change", (event) => {
         textureEnabled = event.matches;
         textureButton.setAttribute("aria-pressed", String(textureEnabled));
-        renderChart();
+        if (dynamicChart) {
+          renderDynamicChart();
+        }
       });
 
       initialiseTheme();
@@ -2500,7 +2009,8 @@
       showEmptyState(emptyPrompt);
       queryMeta.textContent = "尚未查询";
       renderQueryWarnings([]);
-      void loadTableCatalog();
+      // 首次加载不拉取磁盘目录：表列表为空，提示用户先导入文件。
+      renderTableCatalog();
     })();
   </script>
 </body>

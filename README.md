@@ -99,10 +99,9 @@ cd /home/admin1/Workspace/ai-property-manager
 
 页面提供三种操作：
 
-- **查询**：调用固定 Schema 的 `/api/v1/assistant/query`，渲染月报指标和既有看板；
-- **智能分析**：调用 `/api/v1/assistant/query/code`，按响应中的 `result.columns/rows` 动态渲染表格，并按 `chart_meta` 渲染柱状图、折线图或饼图；
-- **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`，随后可基于新表做多文件汇总分析；
-- **Excel 预览**：点击“当前数据表”中的表标签，分页查看该文件的实际单元格内容。
+- **开始**：输入自然语言后点击“开始”（或按回车），统一调用 `/api/v1/assistant/query/code`，按响应中的 `result.columns/rows` 动态渲染表格，并按 `chart_meta` 渲染柱状图、折线图或饼图；
+- **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`；页面首次加载不预置任何表，导入后“当前数据表”只展示本次会话导入的文件；
+- **Excel 预览**：点击“当前数据表”中的表标签，分页查看该文件的实际单元格内容。表较多时列表横向滚动，不撑破页面。
 
 响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，链接指向 Java 网关的下载接口；前端不会直接访问 8000。
 
