@@ -29,6 +29,7 @@ from app.schemas.code_query import (
     ResultColumn,
 )
 from app.services.code_executor import (
+    CodeExecutionResult,
     CodeExecutor,
     SandboxExecutionError,
     SandboxTimeoutError,
@@ -43,6 +44,7 @@ from app.services.code_generator import (
     build_retry_feedback,
     build_table_profile,
 )
+from app.services.chart_meta import infer_chart_meta
 from app.services.code_safety import (
     CodeExtractionError,
     UnsafeCodeError,
@@ -51,6 +53,7 @@ from app.services.code_safety import (
     validate_generated_code,
 )
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,7 @@ class CodeQueryAgent:
         generator: DeepSeekCodeGenerator,
         executor: CodeExecutor,
         table_catalog: TableCatalog | None = None,
+        report_exporter: ExcelReportExporter | None = None,
     ) -> None:
         self._settings = settings
         self._extractor = extractor
@@ -93,6 +97,7 @@ class CodeQueryAgent:
             if table_catalog is not None and settings.table_directory_enabled
             else None
         )
+        self._report_exporter = report_exporter
 
     async def handle(
         self,
@@ -186,9 +191,7 @@ class CodeQueryAgent:
                         self._executor.execute,
                         source.frames[source.primary_table],
                         code,
-                        timeout=min(
-                            self._settings.code_exec_timeout_seconds, remaining
-                        ),
+                        timeout=min(self._settings.code_exec_timeout_seconds, remaining),
                         tables=source.frames,
                         primary_table=source.primary_table,
                     )
@@ -200,9 +203,7 @@ class CodeQueryAgent:
             except SandboxTimeoutError as exc:
                 error_message = sanitize_error_text(exc)
                 retry_errors.append(error_message)
-                logger.info(
-                    "代码执行超时 request_id=%s attempt=%s", request_id, attempt
-                )
+                logger.info("代码执行超时 request_id=%s attempt=%s", request_id, attempt)
                 if attempt >= max_attempts:
                     final_timeout = True
                     break
@@ -236,6 +237,13 @@ class CodeQueryAgent:
             if execution.row_count == 0:
                 warnings.append("生成代码返回了空结果")
 
+            chart_meta = infer_chart_meta(execution.columns, execution.rows)
+            download_url = await self._export_report(
+                request_id=request_id,
+                execution=execution,
+                warnings=warnings,
+            )
+
             elapsed_ms = int((perf_counter() - started_at) * 1000)
             logger.info(
                 "代码查询完成 request_id=%s rows=%s attempts=%s elapsed_ms=%s",
@@ -263,6 +271,8 @@ class CodeQueryAgent:
                     rows=execution.rows,
                     row_count=execution.row_count,
                 ),
+                chart_meta=chart_meta,
+                download_url=download_url,
                 code=CodeExecutionInfo(
                     attempts=attempts,
                     generated_code=(
@@ -300,6 +310,42 @@ class CodeQueryAgent:
                 details=details,
             )
         raise CodeGenerationError(details=details)
+
+    async def _export_report(
+        self,
+        *,
+        request_id: str,
+        execution: CodeExecutionResult,
+        warnings: list[str],
+    ) -> str | None:
+        """导出 Excel；失败只降级为警告，不影响查询结果返回。"""
+        if (
+            self._report_exporter is None
+            or not self._report_exporter.enabled
+            or execution.row_count == 0
+        ):
+            return None
+
+        try:
+            exported = await anyio.to_thread.run_sync(
+                partial(
+                    self._report_exporter.export,
+                    columns=execution.columns,
+                    rows=execution.rows,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 导出失败不应中断查询
+            logger.warning(
+                "Excel 导出失败 request_id=%s error=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            warnings.append("结果 Excel 导出失败，可继续查看页面结果")
+            return None
+
+        if exported is None:
+            return None
+        return f"{REPORT_DOWNLOAD_PATH}/{exported.filename}"
 
     async def _resolve_source(
         self,

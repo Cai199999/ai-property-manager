@@ -7,9 +7,14 @@ from functools import partial
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse
 
-from app.core.exceptions import TableImportError, TableImportUnavailableError
+from app.core.exceptions import (
+    ReportNotFoundError,
+    TableImportError,
+    TableImportUnavailableError,
+)
 from app.schemas.assistant import AssistantQueryRequest, AssistantQueryResponse
 from app.schemas.code_query import CodeQueryRequest, CodeQueryResponse
 from app.schemas.tables import (
@@ -18,6 +23,7 @@ from app.schemas.tables import (
     TableInfo,
     TableUploadResponse,
 )
+from app.services.report_export import REPORT_MEDIA_TYPE
 from app.services.table_catalog import TableDataset, TableSnapshot
 
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
@@ -63,6 +69,28 @@ async def query_with_generated_code(
     )
 
 
+@router.get(
+    "/download/{filename}",
+    summary="下载查询结果 Excel",
+    response_class=FileResponse,
+)
+async def download_report(filename: str, request: Request) -> FileResponse:
+    exporter = getattr(request.app.state, "report_exporter", None)
+    if exporter is None or not exporter.enabled:
+        raise ReportNotFoundError()
+
+    path = await anyio.to_thread.run_sync(partial(exporter.resolve, filename))
+    return FileResponse(
+        path,
+        media_type=REPORT_MEDIA_TYPE,
+        filename=filename,
+        headers={
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/sources", summary="查看已注册的数据源")
 async def list_sources(request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
@@ -98,17 +126,27 @@ async def list_tables(request: Request) -> TableCatalogResponse:
 async def upload_table(
     request: Request,
     file: UploadFile = File(..., description="仅支持 .xlsx 文件"),
+    filename: str | None = Form(
+        default=None,
+        description="原始文件名；网关用独立字段透传中文名",
+    ),
 ) -> TableUploadResponse:
     service = getattr(request.app.state, "table_import_service", None)
     if service is None or not service.enabled:
         raise TableImportUnavailableError()
+
+    # 网关会把原始文件名放在独立字段中，避免 multipart 头部的编码差异；
+    # 直接调用本接口（curl/Swagger）时仍回退到文件段自带的 filename。
+    original_name = (filename or file.filename or "").strip()
+    if len(original_name) > 255:
+        raise TableImportError("文件名过长")
 
     max_bytes = request.app.state.settings.table_upload_max_bytes
     content = await _read_upload(file, max_bytes=max_bytes)
     dataset, snapshot = await anyio.to_thread.run_sync(
         partial(
             service.import_bytes,
-            filename=file.filename or "",
+            filename=original_name,
             content=content,
         )
     )

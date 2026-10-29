@@ -11,11 +11,14 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -64,8 +67,65 @@ class AssistantGatewayIntegrationTest {
             }
             """;
 
+    private static final String CODE_RESPONSE_JSON = """
+            {
+              "request_id": "gateway-code-001",
+              "query": "按区域统计工单量",
+              "data_source": "directory",
+              "time_range": {"start_date": "2026-09-01", "end_date": "2026-09-30"},
+              "parser": {"engine": "deepseek", "model": "deepseek-chat", "confidence": 0.99},
+              "result": {
+                "columns": [{"name": "所属区域", "dtype": "object"}, {"name": "工单量", "dtype": "int64"}],
+                "rows": [{"所属区域": "朝阳区", "工单量": 132}],
+                "row_count": 1
+              },
+              "chart_meta": {
+                "type": "bar",
+                "title": "工单量按所属区域",
+                "x": "所属区域",
+                "y": ["工单量"],
+                "series": [{"name": "工单量", "key": "工单量", "unit": "单"}]
+              },
+              "download_url": "/api/v1/assistant/download/report_0123456789abcdef0123456789abcdef.xlsx",
+              "code": {"attempts": 1, "retry_errors": []},
+              "meta": {"warnings": [], "future_field": {"enabled": true}}
+            }
+            """;
+
+    private static final String TABLES_RESPONSE_JSON = """
+            {
+              "tables": [
+                {"name": "工单表", "role": "fact", "row_count": 150, "file_name": "工单表.xlsx"}
+              ],
+              "primary_table": "工单表",
+              "warnings": []
+            }
+            """;
+
+    private static final String UPLOAD_RESPONSE_JSON = """
+            {
+              "tables": [
+                {"name": "园区项目表", "role": "dimension", "row_count": 8, "file_name": "园区项目表.xlsx"}
+              ],
+              "primary_table": "园区项目表",
+              "warnings": [],
+              "imported": {"name": "园区项目表", "row_count": 8, "column_count": 9}
+            }
+            """;
+
+    private static final byte[] DOWNLOAD_BYTES = new byte[256 * 1024];
+
+    static {
+        for (int index = 0; index < DOWNLOAD_BYTES.length; index++) {
+            DOWNLOAD_BYTES[index] = (byte) (index % 251);
+        }
+    }
+
     private static final AtomicReference<String> FORWARDED_REQUEST_ID = new AtomicReference<>();
     private static final AtomicReference<String> FORWARDED_BODY = new AtomicReference<>();
+    private static final AtomicReference<String> FORWARDED_UPLOAD_CONTENT_TYPE =
+            new AtomicReference<>();
+    private static final AtomicReference<String> FORWARDED_UPLOAD_BODY = new AtomicReference<>();
     private static final HttpServer UPSTREAM;
     private static final ExecutorService UPSTREAM_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
@@ -101,6 +161,45 @@ class AssistantGatewayIntegrationTest {
                     output.write(response);
                 }
             });
+            UPSTREAM.createContext("/api/v1/assistant/query/code", exchange -> {
+                FORWARDED_REQUEST_ID.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
+                FORWARDED_BODY.set(new String(
+                        exchange.getRequestBody().readAllBytes(),
+                        StandardCharsets.UTF_8
+                ));
+                sendJson(exchange, 200, CODE_RESPONSE_JSON);
+            });
+            UPSTREAM.createContext("/api/v1/assistant/tables/upload", exchange -> {
+                FORWARDED_REQUEST_ID.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
+                FORWARDED_UPLOAD_CONTENT_TYPE.set(
+                        exchange.getRequestHeaders().getFirst("Content-Type")
+                );
+                FORWARDED_UPLOAD_BODY.set(new String(
+                        exchange.getRequestBody().readAllBytes(),
+                        StandardCharsets.ISO_8859_1
+                ));
+                sendJson(exchange, 200, UPLOAD_RESPONSE_JSON);
+            });
+            UPSTREAM.createContext("/api/v1/assistant/tables", exchange ->
+                    sendJson(exchange, 200, TABLES_RESPONSE_JSON));
+            UPSTREAM.createContext("/api/v1/assistant/download/", exchange -> {
+                String path = exchange.getRequestURI().getPath();
+                String filename = path.substring(path.lastIndexOf('/') + 1);
+                if ("missing.xlsx".equals(filename)) {
+                    sendJson(exchange, 404, """
+                            {"error": {"code": "REPORT_NOT_FOUND", "message": "下载文件不存在或已过期"}}
+                            """);
+                    return;
+                }
+                exchange.getResponseHeaders().add(
+                        "Content-Type",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                );
+                exchange.sendResponseHeaders(200, DOWNLOAD_BYTES.length);
+                try (OutputStream output = exchange.getResponseBody()) {
+                    output.write(DOWNLOAD_BYTES);
+                }
+            });
             UPSTREAM.setExecutor(UPSTREAM_EXECUTOR);
             UPSTREAM.start();
         } catch (IOException exception) {
@@ -126,6 +225,19 @@ class AssistantGatewayIntegrationTest {
     static void stopUpstream() {
         UPSTREAM.stop(0);
         UPSTREAM_EXECUTOR.close();
+    }
+
+    private static void sendJson(
+            com.sun.net.httpserver.HttpExchange exchange,
+            int status,
+            String body
+    ) throws IOException {
+        byte[] response = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(status, response.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(response);
+        }
     }
 
     @Test
@@ -188,5 +300,120 @@ class AssistantGatewayIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("REQUEST_VALIDATION_FAILED");
+    }
+
+    @Test
+    void forwardsDynamicCodeResponseWithoutDroppingUnknownFields() throws Exception {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Request-Id", "gateway-code-001");
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/v1/assistant/query/code",
+                HttpMethod.POST,
+                new HttpEntity<>(Map.of("message", "按区域统计工单量"), headers),
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(FORWARDED_REQUEST_ID.get()).isEqualTo("gateway-code-001");
+        assertThat(FORWARDED_BODY.get()).contains("按区域统计工单量");
+
+        JsonNode body = objectMapper.readTree(response.getBody());
+        assertThat(body.path("chart_meta").path("type").asText()).isEqualTo("bar");
+        assertThat(body.path("chart_meta").path("series").get(0).path("unit").asText())
+                .isEqualTo("单");
+        assertThat(body.path("download_url").asText())
+                .startsWith("/api/v1/assistant/download/report_");
+        assertThat(body.path("meta").path("future_field").path("enabled").asBoolean())
+                .isTrue();
+        assertThat(body.path("result").path("rows").get(0).path("工单量").asInt())
+                .isEqualTo(132);
+    }
+
+    @Test
+    void proxiesTableCatalogAndMultipartUpload() {
+        ResponseEntity<String> tables = restTemplate.getForEntity(
+                "/api/v1/assistant/tables",
+                String.class
+        );
+        assertThat(tables.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(tables.getBody()).contains("工单表");
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.set("X-Request-Id", "gateway-upload-001");
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", new ByteArrayResource("fake-xlsx-content".getBytes(StandardCharsets.UTF_8)) {
+            @Override
+            public String getFilename() {
+                return "园区项目表.xlsx";
+            }
+        });
+
+        ResponseEntity<String> upload = restTemplate.exchange(
+                "/api/v1/assistant/tables/upload",
+                HttpMethod.POST,
+                new HttpEntity<>(body, headers),
+                String.class
+        );
+
+        assertThat(upload.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(FORWARDED_REQUEST_ID.get()).isEqualTo("gateway-upload-001");
+        assertThat(FORWARDED_UPLOAD_CONTENT_TYPE.get()).startsWith("multipart/form-data");
+        assertThat(FORWARDED_UPLOAD_BODY.get()).contains("fake-xlsx-content");
+        // 文件段使用 ASCII 安全文件名，原始中文名放到独立 filename 字段，
+        // 避免 RFC 2047 encoded-word 让 Python 的 .xlsx 后缀校验失败。
+        assertThat(FORWARDED_UPLOAD_BODY.get())
+                .contains("filename=\"upload.xlsx\"")
+                .doesNotContain("=?UTF-8?");
+        String forwardedUtf8 = new String(
+                FORWARDED_UPLOAD_BODY.get().getBytes(StandardCharsets.ISO_8859_1),
+                StandardCharsets.UTF_8
+        );
+        assertThat(forwardedUtf8)
+                .contains("name=\"filename\"")
+                .contains("园区项目表.xlsx");
+        assertThat(upload.getBody()).contains("园区项目表");
+    }
+
+    @Test
+    void streamsDownloadAndKeepsFilenameHeaders() {
+        ResponseEntity<byte[]> response = restTemplate.getForEntity(
+                "/api/v1/assistant/download/report_0123456789abcdef0123456789abcdef.xlsx",
+                byte[].class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isEqualTo(DOWNLOAD_BYTES);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+                .contains("attachment")
+                .contains("report_0123456789abcdef0123456789abcdef.xlsx");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL))
+                .contains("private");
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options"))
+                .isEqualTo("nosniff");
+    }
+
+    @Test
+    void rejectsInvalidDownloadNameBeforeCallingAgent() {
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "/api/v1/assistant/download/evil.txt",
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("DOWNLOAD_NAME_INVALID");
+    }
+
+    @Test
+    void relaysUpstreamDownloadNotFoundAsJson() {
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "/api/v1/assistant/download/missing.xlsx",
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).contains("下载文件不存在或已过期");
     }
 }

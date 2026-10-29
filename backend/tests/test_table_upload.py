@@ -56,6 +56,28 @@ def test_upload_adds_table_and_returns_catalog(tmp_path: Path) -> None:
     assert list((tmp_path / "tables").glob("upload_*.xlsx"))
 
 
+def test_upload_uses_filename_form_field_over_part_name(tmp_path: Path) -> None:
+    """网关用 ASCII 文件段名 + 独立 filename 字段透传中文原始名。"""
+    app = create_app(_settings(tmp_path))
+    content = _xlsx_bytes(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/tables/upload",
+            files={
+                "file": (
+                    "upload.xlsx",
+                    content,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+            data={"filename": "园区项目表.xlsx"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["imported"]["name"] == "园区项目表"
+
+
 def test_upload_rejects_non_xlsx(tmp_path: Path) -> None:
     app = create_app(_settings(tmp_path))
 

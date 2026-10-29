@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +50,24 @@ class CodeExecutionInfo(BaseModel):
     retry_errors: list[str] = Field(default_factory=list)
 
 
+class ChartSeries(BaseModel):
+    """图表中的一条数值序列。"""
+
+    name: str
+    key: str
+    unit: str | None = None
+
+
+class ChartMeta(BaseModel):
+    """前端动态渲染所需的图表描述，不绑定具体业务字段。"""
+
+    type: Literal["bar", "line", "pie", "table"] = "table"
+    title: str = "查询结果"
+    x: str | None = None
+    y: list[str] = Field(default_factory=list)
+    series: list[ChartSeries] = Field(default_factory=list)
+
+
 class QueryTableInfo(BaseModel):
     """本次查询可用的数据表摘要，不暴露服务器路径。"""
 
@@ -72,7 +90,7 @@ class CodeQueryMeta(BaseModel):
 
 
 class CodeQueryResponse(BaseModel):
-    """代码查询响应。Java 网关暂不代理此端点。"""
+    """代码查询响应。Java 网关以 JsonNode 原样透传，不绑定业务字段。"""
 
     request_id: str
     query: str
@@ -80,5 +98,7 @@ class CodeQueryResponse(BaseModel):
     time_range: TimeRange
     parser: ParserInfo
     result: CodeResult
+    chart_meta: ChartMeta = Field(default_factory=ChartMeta)
+    download_url: str | None = None
     code: CodeExecutionInfo
     meta: CodeQueryMeta

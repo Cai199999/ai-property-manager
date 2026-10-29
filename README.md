@@ -1,17 +1,19 @@
-# AI 物管助手（第一阶段）
+# AI 物管助手
 
 自然语言驱动的物业工单查询系统：DeepSeek 解析时间范围 → 数据源适配器获取数据 → Pandas 汇总 → Java 网关统一对外。
+
+系统固定为三段式调用链：**前端 8081 → Java 网关 8080 → Python Agent 8000**。浏览器只访问 8080，8000 不对浏览器暴露；查询、动态分析、表目录、文件上传和 Excel 下载全部由 Java 网关透传。
 
 第一阶段使用 RPA 模拟下载 Excel，模拟文件完全复刻真实「工单汇总查询」导出件的标题行、46 列业务表头和明细版式；适配器层已按生产环境设计，可在不改 Agent 代码的前提下切换到真实 RPA 或 HTTP API。
 
 ## 架构
 
 ```text
-调用方
-  │  POST /api/v1/assistant/query
+浏览器看板 :8081
+  │  只请求 Java 网关，响应中的 download_url 也由网关代理
   ▼
 Java Spring Boot 网关 :8080
-  │  校验参数、请求 ID 透传、超时控制、统一错误
+  │  参数校验、请求 ID、超时、统一错误、JSON 透传、流式下载代理
   ▼
 Python FastAPI Agent :8000
   │
@@ -95,7 +97,13 @@ cd /home/admin1/Workspace/ai-property-manager
 
 访问 http://127.0.0.1:8081/
 
-看板读取 `frontend/data/assistant-response.js` 中的 API 响应快照，用 ECharts 绘制报修类型饼图，并提供核心指标、图例数值、可展开数据表、明暗主题与纹理辅助。更新数据时，将新的 `/api/v1/assistant/query` 响应写入该文件即可。
+页面提供三种操作：
+
+- **查询**：调用固定 Schema 的 `/api/v1/assistant/query`，渲染月报指标和既有看板；
+- **智能分析**：调用 `/api/v1/assistant/query/code`，按响应中的 `result.columns/rows` 动态渲染表格，并按 `chart_meta` 渲染柱状图、折线图或饼图；
+- **导入文件**：向 `/api/v1/assistant/tables/upload` 上传 `.xlsx`，随后可基于新表做多表分析。
+
+响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，链接指向 Java 网关的下载接口；前端不会直接访问 8000。
 
 ### 5. 调用
 
@@ -109,7 +117,7 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
   }' | python3 -m json.tool
 ```
 
-也可直连 Agent：`http://127.0.0.1:8000/api/v1/assistant/query`。
+浏览器和前端代码不得直连 Agent；`http://127.0.0.1:8000` 只用于本机开发调试。
 
 ## API 契约
 
@@ -191,7 +199,55 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
 - 生成代码必须在模块顶层给 `result_df` 赋值；禁止 import、网络、文件、系统命令和双下划线对象访问。
 - 代码只在 `bwrap` 子进程中执行，网络和项目目录均不可见；沙箱不可用时直接失败，不会退化为主进程 `exec()`。
 - 执行失败会把安全错误和异常信息追加到对话，最多重试 2 次。
-- 新端点返回通用结果表，不改变现有 `/api/v1/assistant/query` 的固定业务 Schema；Java 网关和前端暂未接入该端点。
+- 新端点返回通用结果表，不改变现有 `/api/v1/assistant/query` 的固定业务 Schema。
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/assistant/query/code \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-Id: code-demo-001' \
+  -d '{"message": "按所属区域统计工单量，用饼图展示"}' \
+  | python3 -m json.tool
+```
+
+### 动态结果契约
+
+```json
+{
+  "result": {
+    "columns": [
+      {"name": "所属区域", "dtype": "object"},
+      {"name": "工单量", "dtype": "int64"}
+    ],
+    "rows": [{"所属区域": "朝阳区", "工单量": 132}],
+    "row_count": 1
+  },
+  "chart_meta": {
+    "type": "pie",
+    "title": "工单量按所属区域",
+    "x": "所属区域",
+    "y": ["工单量"],
+    "series": [{"name": "工单量", "key": "工单量", "unit": "单"}]
+  },
+  "download_url": "/api/v1/assistant/download/report_<32位hex>.xlsx"
+}
+```
+
+- `chart_meta` 由 Python 根据结果列类型和取值确定，不额外调用大模型；无法判断时回退为 `table`。
+- `download_url` 是相对路径，前端只允许拼接 Java 网关地址；网关收到 `/download/{filename}` 后校验文件名，再向 Agent 取文件流。
+- Java 侧所有动态接口统一返回 `JsonNode`，不定义业务 DTO。Python 新增字段会原样出现在响应里，无需改 Java。
+- 大结果只返回前端预览所需行数；完整结果通过 Excel 下载获取。
+
+### 下载与内存安全
+
+网关下载接口 `GET /api/v1/assistant/download/{filename}` 不会把文件读成 `byte[]`：
+
+1. 使用独立 `RestClient` 和 120 秒下载读超时，禁止跟随重定向；
+2. 文件名必须匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.xlsx$`，拒绝路径穿越；
+3. 用 64 KB 缓冲区把上游 `InputStream` 直接复制到 `HttpServletResponse.getOutputStream()`，堆内存占用与文件大小无关；
+4. 超过 `download-max-bytes` 立即中断；`Semaphore` 限制并发下载数，超限返回 429；
+5. 透传 `Content-Length`、`Content-Disposition`、`nosniff` 和私有缓存策略，浏览器能显示进度且不会缓存敏感报表。
+
+Python 导出侧使用 openpyxl `write_only` 模式、随机 token 文件名、TTL 清理和最大文件数限制；单元格以 `= + - @` 开头时加单引号，防止 Excel 公式注入。
 
 启动前确认本机存在 `bwrap`：
 
@@ -234,18 +290,20 @@ command -v bwrap
 ### 3. 上传接口
 
 ```bash
-curl -s http://127.0.0.1:8000/api/v1/assistant/tables/upload \
+curl -s http://127.0.0.1:8080/api/v1/assistant/tables/upload \
   -F 'file=@/path/to/园区项目表.xlsx;filename=园区项目表.xlsx' \
   | python3 -m json.tool
 
-curl -s http://127.0.0.1:8000/api/v1/assistant/tables | python3 -m json.tool
+curl -s http://127.0.0.1:8080/api/v1/assistant/tables | python3 -m json.tool
 ```
 
 - 只接受 `.xlsx`，默认上限 20 MB、5 万行、100 列，仅导入第一个非空工作表；
 - 校验 xlsx 压缩包条目数与解压总量，文件名只取 basename，落盘名用 UUID；
-- 上传成功后写入 `upload_index.json` 并刷新目录；前端 8081 通过 CORS 直传 8000。
+- 上传成功后写入 `upload_index.json` 并刷新目录；
+- Java 网关转发 multipart 时，文件段使用 ASCII 文件名 `upload.xlsx`，原始中文名通过独立表单字段 `filename` 传给 Python，避免 RFC 2047 encoded-word 导致后缀校验失败；
+- 网关限制单文件和单请求大小，超限返回 413；Python 侧再次校验压缩包结构，上传件始终按不可信数据处理。
 
-前端查询面板新增“导入文件”按钮和“当前数据表”清单。注意：现有自然语言查询仍调用 Java 网关的固定 Schema 接口，多表查询目前通过 Python `/api/v1/assistant/query/code` 验证，前端通用结果渲染留待下一步接入。
+前端“导入文件”按钮同样请求 8080，上传成功后刷新“当前数据表”清单。
 
 ## 扩展数据源
 
@@ -303,8 +361,15 @@ PROPERTY_API_KEY=...
 | `TABLE_MAX_FILES` | `8` | 单次扫描最大表数 |
 | `TABLE_UPLOAD_MAX_BYTES` | `20000000` | 上传文件上限 |
 | `CODE_SANDBOX_MODE` | `bwrap` | 代码执行隔离模式，`disabled` 时拒绝执行 |
-| `CORS_ORIGINS` | `http://127.0.0.1:8081,...` | 前端直传上传接口的跨域白名单 |
+| `REPORT_EXPORT_ENABLED` | `true` | 是否生成结果 Excel |
+| `REPORT_EXPORT_DIR` | `.runtime/exports` | 导出文件目录 |
+| `REPORT_EXPORT_TTL_SECONDS` | `3600` | 导出文件有效期 |
+| `REPORT_EXPORT_MAX_FILES` | `100` | 导出目录最大文件数 |
+| `REPORT_EXPORT_MAX_BYTES` | `20000000` | 单个导出文件上限 |
+| `CORS_ORIGINS` | `http://127.0.0.1:8081,...` | 浏览器访问网关的跨域白名单 |
 | `FASTAPI_BASE_URL` | `http://127.0.0.1:8000` | 网关 -> Agent 地址 |
+| `gateway.agent.download-max-concurrent` | `16` | 网关并发下载上限（`application.yml`） |
+| `gateway.agent.download-max-bytes` | `20000000` | 网关允许透传的下载大小（`application.yml`） |
 
 ## 测试
 
@@ -327,4 +392,7 @@ cd gateway && mvn test
 - 当前没有数据库；第一阶段只读 Excel 并即时汇总。
 - RPA 模拟器按真实导出件结构生成确定性样例数据，仅用于打通链路，不代表真实业务口径。
 - 网关不缓存、不重试；后续可在网关层按幂等键增加缓存/重试策略。
-- 第一阶段前端为静态数据快照看板；FastAPI 与网关均已提供稳定 JSON 契约，后续可切换为实时查询。
+- 前端所有业务请求都走 Java 8080；8000 仅限本机调试，不配置浏览器跨域。
+- 动态 JSON 不做字段映射，网关只负责校验、限制大小和原样转发。
+- 下载文件由 Python 生成并短期保留，Java 流式代理，不在网关落盘。
+- 当前鉴权依赖本机回环地址；对外开放前必须补充身份认证、限流和审计。

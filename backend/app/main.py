@@ -28,6 +28,7 @@ from app.services.code_executor import CodeExecutor
 from app.services.code_generator import DeepSeekCodeGenerator
 from app.services.code_query_agent import CodeQueryAgent
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.report_export import ExcelReportExporter
 from app.services.table_catalog import TableCatalog
 from app.services.table_import import TableImportService
 
@@ -63,6 +64,7 @@ def create_app(
         if resolved_table_catalog is not None
         else None
     )
+    report_exporter = ExcelReportExporter(resolved_settings)
 
     agent = AssistantAgent(resolved_settings, resolved_extractor, resolved_fetcher)
     code_agent = CodeQueryAgent(
@@ -72,6 +74,7 @@ def create_app(
         resolved_code_generator,
         resolved_code_executor,
         table_catalog=resolved_table_catalog,
+        report_exporter=report_exporter,
     )
 
     @asynccontextmanager
@@ -102,6 +105,7 @@ def create_app(
     app.state.fetcher_registry = registry
     app.state.table_catalog = resolved_table_catalog
     app.state.table_import_service = table_import_service
+    app.state.report_exporter = report_exporter
 
     # 前端静态页运行在 8081，导入文件直传 8000，需要单独放行。
     if resolved_settings.cors_origin_list:
@@ -117,9 +121,7 @@ def create_app(
     @app.middleware("http")
     async def attach_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
         candidate = request.headers.get("X-Request-Id", "").strip()
-        request_id = (
-            candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
-        )
+        request_id = candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-Id"] = request_id
@@ -150,6 +152,7 @@ def create_app(
             "code_sandbox_available": resolved_code_executor.available,
             "table_directory_enabled": resolved_settings.table_directory_enabled,
             "table_catalog_ready": resolved_table_catalog is not None,
+            "report_export_enabled": resolved_settings.report_export_enabled,
         }
 
     return app

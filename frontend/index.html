@@ -213,7 +213,7 @@
 
     .query-form {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 220px auto auto;
+      grid-template-columns: minmax(0, 1fr) 220px auto auto auto;
       align-items: end;
       gap: 12px;
     }
@@ -696,6 +696,55 @@
       vertical-align: 1px;
     }
 
+    .dynamic-card {
+      margin-top: 16px;
+      padding: 22px 26px 20px;
+    }
+
+    .dynamic-card[hidden] {
+      display: none;
+    }
+
+    .dynamic-download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 0 14px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .dynamic-chart {
+      height: 340px;
+      margin-top: 16px;
+    }
+
+    .dynamic-chart[hidden] {
+      display: none;
+    }
+
+    .dynamic-table-scroll {
+      max-height: 430px;
+      margin-top: 12px;
+      overflow: auto;
+      border-top: 1px solid var(--grid);
+    }
+
+    .dynamic-table-scroll table {
+      min-width: 520px;
+    }
+
+    .dynamic-table-scroll th {
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+    }
+
+    .dynamic-footnote[hidden] {
+      display: none;
+    }
+
     .empty-state {
       padding: 28px;
       border: 1px dashed var(--hairline);
@@ -917,6 +966,8 @@
             </select>
           </div>
           <button class="query-button" id="queryButton" type="submit">查询</button>
+          <button class="query-button query-button--secondary" id="analyzeButton"
+                  type="button" title="多表联查并生成动态结果">智能分析</button>
           <button class="query-button query-button--secondary" id="uploadButton"
                   type="button" title="导入 .xlsx 文件，最大 20 MB">导入文件</button>
           <input id="uploadInput" type="file"
@@ -1003,6 +1054,28 @@
       </section>
       </div>
 
+      <section class="card dynamic-card" id="dynamicCard" hidden aria-labelledby="dynamicTitle">
+        <div class="card-head">
+          <div>
+            <p class="kicker">智能分析</p>
+            <h2 id="dynamicTitle">多表查询结果</h2>
+            <p class="card-subtitle" id="dynamicSubtitle">等待查询。</p>
+          </div>
+          <a class="query-button query-button--secondary dynamic-download"
+             id="downloadButton" href="#" download hidden>下载 Excel</a>
+        </div>
+        <div class="dynamic-chart" id="dynamicChart" role="img"
+             aria-label="智能分析图表" hidden></div>
+        <div class="dynamic-table-scroll">
+          <table>
+            <caption id="dynamicTableTitle">查询结果</caption>
+            <thead id="dynamicTableHead"></thead>
+            <tbody id="dynamicTableBody"></tbody>
+          </table>
+        </div>
+        <p class="chart-footnote dynamic-footnote" id="dynamicFootnote" hidden></p>
+      </section>
+
       <div class="empty-state" id="errorState" hidden>
         页面资源加载异常，请刷新后重试。
       </div>
@@ -1040,6 +1113,7 @@
       const queryInput = document.getElementById("queryInput");
       const queryProject = document.getElementById("queryProject");
       const queryButton = document.getElementById("queryButton");
+      const analyzeButton = document.getElementById("analyzeButton");
       const queryFeedback = document.getElementById("queryFeedback");
       const queryStatus = document.getElementById("queryStatus");
       const queryError = document.getElementById("queryError");
@@ -1051,10 +1125,23 @@
       const uploadStatus = document.getElementById("uploadStatus");
       const tableCatalog = document.getElementById("tableCatalog");
       const tableCatalogList = document.getElementById("tableCatalogList");
-      const queryEndpoint = "http://127.0.0.1:8080/api/v1/assistant/query";
-      const tableEndpoint = "http://127.0.0.1:8000/api/v1/assistant/tables";
-      const uploadEndpoint = `${tableEndpoint}/upload`;
+      const dynamicCard = document.getElementById("dynamicCard");
+      const dynamicSubtitle = document.getElementById("dynamicSubtitle");
+      const dynamicChartElement = document.getElementById("dynamicChart");
+      const dynamicTableTitle = document.getElementById("dynamicTableTitle");
+      const dynamicTableHead = document.getElementById("dynamicTableHead");
+      const dynamicTableBody = document.getElementById("dynamicTableBody");
+      const dynamicFootnote = document.getElementById("dynamicFootnote");
+      const downloadButton = document.getElementById("downloadButton");
+      // 所有浏览器请求只发往 Java 网关，Python 8000 仅对 Java 可见。
+      const gatewayOrigin = "http://127.0.0.1:8080";
+      const apiBase = `${gatewayOrigin}/api/v1/assistant`;
+      const queryEndpoint = `${apiBase}/query`;
+      const codeQueryEndpoint = `${apiBase}/query/code`;
+      const tableEndpoint = `${apiBase}/tables`;
+      const uploadEndpoint = `${apiBase}/tables/upload`;
       const maxUploadBytes = 20 * 1024 * 1024;
+      const maxDynamicRows = 200;
       const emptyPrompt = "请输入自然语言开始查询";
       const emptyResultMessage = "该时间范围内没有符合条件的工单";
       const projectNames = Object.freeze([
@@ -1073,6 +1160,8 @@
       const contrastMedia = window.matchMedia("(prefers-contrast: more)");
       const themeStorageKey = "assistant-theme";
       let chart = null;
+      let dynamicChart = null;
+      let dynamicPayload = null;
       let textureEnabled = contrastMedia.matches;
       let projectManuallySelected = false;
       let isQuerying = false;
@@ -1119,6 +1208,9 @@
         }
         if (chart) {
           renderChart();
+        }
+        if (dynamicChart) {
+          renderDynamicChart();
         }
       };
 
@@ -1281,6 +1373,239 @@
         }).join("");
       };
 
+      const dynamicCellFormatter = new Intl.NumberFormat("zh-CN", {
+        maximumFractionDigits: 4
+      });
+
+      const formatDynamicCell = (value) => {
+        if (value === null || value === undefined || value === "") {
+          return "—";
+        }
+        return typeof value === "number"
+          ? dynamicCellFormatter.format(value)
+          : String(value);
+      };
+
+      const renderDynamicTable = () => {
+        const columns = dynamicPayload?.result?.columns;
+        const rows = dynamicPayload?.result?.rows;
+        if (!Array.isArray(columns) || !Array.isArray(rows)) {
+          dynamicTableHead.replaceChildren();
+          dynamicTableBody.replaceChildren();
+          return;
+        }
+
+        const headRow = document.createElement("tr");
+        columns.forEach((column) => {
+          const th = document.createElement("th");
+          th.scope = "col";
+          th.textContent = column.name;
+          headRow.appendChild(th);
+        });
+        dynamicTableHead.replaceChildren(headRow);
+
+        const fragment = document.createDocumentFragment();
+        rows.slice(0, maxDynamicRows).forEach((row) => {
+          const tr = document.createElement("tr");
+          columns.forEach((column) => {
+            const td = document.createElement("td");
+            td.textContent = formatDynamicCell(row[column.name]);
+            tr.appendChild(td);
+          });
+          fragment.appendChild(tr);
+        });
+        dynamicTableBody.replaceChildren(fragment);
+
+        if (rows.length > maxDynamicRows) {
+          dynamicFootnote.textContent =
+            `仅显示前 ${maxDynamicRows} 行，完整 ${numberFormatter.format(rows.length)} 行请下载 Excel。`;
+          dynamicFootnote.hidden = false;
+        } else if (rows.length === 0) {
+          dynamicFootnote.textContent = "查询结果为空。";
+          dynamicFootnote.hidden = false;
+        } else {
+          dynamicFootnote.textContent = `共 ${numberFormatter.format(rows.length)} 行。`;
+          dynamicFootnote.hidden = false;
+        }
+      };
+
+      const renderDynamicChart = () => {
+        if (!dynamicChart || !dynamicPayload) {
+          return;
+        }
+        const meta = dynamicPayload.chart_meta;
+        const rows = dynamicPayload.result?.rows;
+        if (!meta || meta.type === "table" || !meta.x
+            || !Array.isArray(meta.y) || meta.y.length === 0
+            || !Array.isArray(rows)) {
+          dynamicChart.clear();
+          dynamicChartElement.hidden = true;
+          return;
+        }
+
+        const colors = seriesColors();
+        const textMuted = cssValue("--text-muted");
+        const gridColor = cssValue("--grid");
+        const surface = cssValue("--surface");
+        const hairline = cssValue("--hairline");
+        const textPrimary = cssValue("--text-primary");
+        const fontFamily = cssValue("--font-sans").replace(/\s+/g, " ");
+        const categories = rows.map((row) => formatDynamicCell(row[meta.x]));
+        const isPie = meta.type === "pie";
+        const series = isPie
+          ? [{
+              name: meta.y[0],
+              type: "pie",
+              radius: ["45%", "72%"],
+              center: ["50%", "50%"],
+              minAngle: 2,
+              padAngle: 1.5,
+              itemStyle: {
+                borderColor: surface,
+                borderWidth: 2,
+                borderRadius: 4
+              },
+              label: { show: false },
+              labelLine: { show: false },
+              data: rows.map((row, index) => ({
+                name: formatDynamicCell(row[meta.x]),
+                value: Number(row[meta.y[0]] || 0),
+                itemStyle: {
+                  color: colors[index % colors.length],
+                  decal: decalFor(index)
+                }
+              }))
+            }]
+          : meta.y.map((key, index) => ({
+              name: key,
+              type: meta.type,
+              smooth: meta.type === "line",
+              symbol: "circle",
+              symbolSize: 8,
+              lineStyle: { width: 2 },
+              itemStyle: { color: colors[index % colors.length] },
+              data: rows.map((row) => Number(row[key] || 0))
+            }));
+
+        const option = {
+          animation: !reduceMotion,
+          animationDuration: 500,
+          textStyle: { fontFamily },
+          color: colors,
+          tooltip: {
+            trigger: isPie ? "item" : "axis",
+            confine: true,
+            backgroundColor: surface,
+            borderColor: hairline,
+            borderWidth: 1,
+            padding: 12,
+            textStyle: { color: textPrimary, fontFamily, fontSize: 12 }
+          },
+          legend: isPie || meta.y.length > 1
+            ? { bottom: 0, textStyle: { color: textMuted, fontSize: 12 } }
+            : { show: false },
+          grid: isPie
+            ? undefined
+            : { left: 8, right: 20, top: 20, bottom: meta.y.length > 1 ? 38 : 12, containLabel: true }
+        };
+        if (!isPie) {
+          option.xAxis = {
+            type: "category",
+            data: categories,
+            axisLabel: {
+              color: textMuted,
+              fontSize: 11,
+              interval: 0,
+              rotate: categories.length > 8 ? 30 : 0
+            },
+            axisLine: { lineStyle: { color: hairline } },
+            axisTick: { show: false }
+          };
+          option.yAxis = {
+            type: "value",
+            axisLabel: { color: textMuted, fontSize: 11 },
+            splitLine: { lineStyle: { color: gridColor } }
+          };
+        }
+        option.series = series;
+        dynamicChart.setOption(option, true);
+      };
+
+      const safeDownloadUrl = (value) => {
+        if (typeof value !== "string" || !value.trim()) {
+          return null;
+        }
+        try {
+          const url = new URL(value, gatewayOrigin);
+          if (url.origin !== gatewayOrigin) {
+            return null;
+          }
+          if (!/^\/api\/v1\/assistant\/download\/[A-Za-z0-9._-]+\.xlsx$/.test(url.pathname)) {
+            return null;
+          }
+          return url;
+        } catch {
+          return null;
+        }
+      };
+
+      const renderDynamicPayload = (payload) => {
+        if (!payload || !payload.result || !Array.isArray(payload.result.columns)) {
+          throw new Error("智能分析返回的数据结构不完整。");
+        }
+        dynamicPayload = payload;
+        dynamicCard.hidden = false;
+        emptyState.hidden = true;
+        errorState.hidden = true;
+        updateQueryFooter(payload);
+        renderQueryWarnings(payload.meta?.warnings);
+
+        const meta = payload.chart_meta;
+        dynamicTableTitle.textContent = meta?.title || "查询结果";
+        const tableCount = Array.isArray(payload.meta?.tables) ? payload.meta.tables.length : 0;
+        dynamicSubtitle.textContent =
+          `${numberFormatter.format(payload.result.row_count ?? payload.result.rows?.length ?? 0)} 行`
+          + `${tableCount ? ` · ${tableCount} 张数据表` : ""}`
+          + `${payload.code?.attempts ? ` · ${payload.code.attempts} 次代码尝试` : ""}`;
+
+        renderDynamicTable();
+        const hasChart = meta && meta.type !== "table" && meta.x
+          && Array.isArray(meta.y) && meta.y.length > 0;
+        if (hasChart) {
+          dynamicChartElement.hidden = false;
+          if (!dynamicChart) {
+            dynamicChart = window.echarts
+              ? window.echarts.init(dynamicChartElement, null, { renderer: "canvas" })
+              : null;
+            if (dynamicChart && "ResizeObserver" in window) {
+              new ResizeObserver(() => dynamicChart.resize()).observe(dynamicChartElement);
+            }
+          }
+          renderDynamicChart();
+          dynamicChartElement.setAttribute(
+            "aria-label",
+            `${meta.title || "智能分析图表"}：${meta.x} ${meta.y.join("、")}`
+          );
+        } else {
+          dynamicChartElement.hidden = true;
+          if (dynamicChart) {
+            dynamicChart.clear();
+          }
+        }
+
+        const downloadUrl = safeDownloadUrl(payload.download_url);
+        if (downloadUrl) {
+          downloadButton.href = downloadUrl.href;
+          downloadButton.download = decodeURIComponent(
+            downloadUrl.pathname.split("/").pop() || "result.xlsx"
+          );
+          downloadButton.hidden = false;
+        } else {
+          downloadButton.hidden = true;
+          downloadButton.removeAttribute("href");
+        }
+      };
+
       let repairTypes = [];
 
       const hydrate = () => {
@@ -1360,6 +1685,7 @@
         resultsRoot.hidden = true;
         errorState.hidden = true;
         tableCard.hidden = true;
+        dynamicCard.hidden = true;
         tableButton.setAttribute("aria-expanded", "false");
         tableButton.textContent = "数据表";
       };
@@ -1422,6 +1748,8 @@
         isQuerying = loading;
         queryButton.disabled = loading;
         queryButton.textContent = loading ? "查询中…" : "查询";
+        analyzeButton.disabled = loading;
+        analyzeButton.textContent = loading ? "分析中…" : "智能分析";
         chartCard.classList.toggle("is-refreshing", loading);
         chartCard.setAttribute("aria-busy", String(loading));
       };
@@ -1558,7 +1886,7 @@
           const payload = await response.json();
           renderTableCatalog(payload.tables, payload.primary_table);
         } catch {
-          // Python 服务未启动时静默隐藏，不影响现有看板查询。
+          // 网关或数据目录未就绪时静默隐藏，不影响现有看板查询。
         }
       };
 
@@ -1627,6 +1955,81 @@
       });
       uploadInput.addEventListener("change", () => {
         void handleUpload();
+      });
+
+      const runDynamicQuery = async () => {
+        if (isQuerying) {
+          return;
+        }
+
+        const message = queryInput.value.trim();
+        if (message.length < 2) {
+          showQueryError("请输入至少 2 个字符的查询内容。");
+          queryInput.focus();
+          return;
+        }
+
+        const propertyName = queryProject.value || null;
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 95000);
+
+        setQuerying(true);
+        renderQueryWarnings([]);
+        showQueryStatus("正在进行多表智能分析，请稍候…", "loading");
+
+        try {
+          let response;
+          try {
+            response = await fetch(codeQueryEndpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                message,
+                property_name: propertyName
+              }),
+              signal: controller.signal
+            });
+          } catch (error) {
+            if (error.name === "AbortError") {
+              throw error;
+            }
+            const networkError = new Error("无法连接 8080，请确认网关已启动");
+            networkError.name = "QueryNetworkError";
+            throw networkError;
+          }
+
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch {
+            payload = null;
+          }
+
+          if (!response.ok) {
+            throw new Error(httpErrorMessage(response.status, payload));
+          }
+          renderDynamicPayload(payload);
+          const rowCount = Number(payload.result?.row_count ?? payload.result?.rows?.length ?? 0);
+          showQueryStatus(
+            `智能分析完成 · ${numberFormatter.format(rowCount)} 行`,
+            "success"
+          );
+        } catch (error) {
+          if (error.name === "AbortError") {
+            showQueryError("智能分析超时，请稍后重试。");
+          } else {
+            showQueryError(error.message || "智能分析失败，请稍后重试。");
+          }
+        } finally {
+          window.clearTimeout(timeoutId);
+          setQuerying(false);
+        }
+      };
+
+      analyzeButton.addEventListener("click", () => {
+        void runDynamicQuery();
       });
 
       queryForm.addEventListener("submit", async (event) => {

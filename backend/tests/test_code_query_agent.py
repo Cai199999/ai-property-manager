@@ -115,6 +115,7 @@ def _settings(**overrides: object) -> Settings:
         "code_total_timeout_seconds": 30.0,
         "code_llm_timeout_seconds": 5.0,
         "code_exec_timeout_seconds": 2.0,
+        "report_export_enabled": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -357,3 +358,39 @@ def test_code_query_api_returns_422_after_retries() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "CODE_GENERATION_FAILED"
+
+
+def test_code_query_exports_excel_and_download_endpoint(tmp_path: Path) -> None:
+    settings = _settings(
+        report_export_enabled=True,
+        report_export_dir=tmp_path / "exports",
+    )
+    generator = _FakeGenerator(["result_df = source_df.copy()"])
+    app = create_app(
+        settings,
+        extractor=_FakeExtractor(),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(),  # type: ignore[arg-type]
+        code_generator=generator,  # type: ignore[arg-type]
+        code_executor=_FakeExecutor([_success()]),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/query/code",
+            json={"message": "按项目统计工单"},
+        )
+        body = response.json()
+        download_url = body["download_url"]
+        download = client.get(download_url)
+        invalid = client.get("/api/v1/assistant/download/not-a-report.xlsx")
+
+    assert response.status_code == 200
+    assert body["chart_meta"]["type"] == "table"
+    assert download_url.startswith("/api/v1/assistant/download/report_")
+    assert download.status_code == 200
+    assert download.content[:2] == b"PK"
+    assert download.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument"
+    )
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "REPORT_NAME_INVALID"

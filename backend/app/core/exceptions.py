@@ -104,3 +104,19 @@ class TableImportUnavailableError(AppError):
     code = "TABLE_IMPORT_UNAVAILABLE"
     status_code = 503
     message = "多表数据目录未启用，无法导入文件"
+
+
+class ReportNameInvalidError(AppError):
+    """下载文件名不符合导出文件名规则。"""
+
+    code = "REPORT_NAME_INVALID"
+    status_code = 400
+    message = "下载文件名不合法"
+
+
+class ReportNotFoundError(AppError):
+    """导出文件不存在、已过期或已被清理。"""
+
+    code = "REPORT_NOT_FOUND"
+    status_code = 404
+    message = "下载文件不存在或已过期"

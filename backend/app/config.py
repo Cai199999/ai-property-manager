@@ -73,11 +73,20 @@ class Settings(BaseSettings):
     code_max_result_rows: int = Field(default=5_000, ge=1, le=100_000)
     code_max_result_columns: int = Field(default=50, ge=1, le=500)
     code_max_cell_chars: int = Field(default=1_000, ge=10, le=20_000)
-    code_max_payload_bytes: int = Field(
-        default=20_000_000, ge=1_000_000, le=100_000_000
-    )
+    code_max_payload_bytes: int = Field(default=20_000_000, ge=1_000_000, le=100_000_000)
     code_sample_rows: int = Field(default=5, ge=1, le=20)
     code_expose_generated_code: bool = True
+
+    # 查询结果 Excel 导出：文件由 Python 落盘，前端只能经 Java 网关下载。
+    report_export_enabled: bool = True
+    report_export_dir: Path = Path(".runtime/exports")
+    report_export_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    report_export_max_files: int = Field(default=100, ge=1, le=1_000)
+    report_export_max_bytes: int = Field(
+        default=20_000_000,
+        ge=100_000,
+        le=100_000_000,
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -111,9 +120,7 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         """把环境变量中的逗号分隔白名单转成列表。"""
-        return [
-            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
-        ]
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
     def tz(self) -> ZoneInfo:
