@@ -25,13 +25,9 @@ class SummaryResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def summarize_work_orders(
-    frame: pd.DataFrame, *, preview_rows: int = 20
-) -> SummaryResult:
+def summarize_work_orders(frame: pd.DataFrame, *, preview_rows: int = 20) -> SummaryResult:
     """生成核心经营指标、多维分组，以及供页面展示的明细预览。"""
-    missing = [
-        column for column in REQUIRED_WORK_ORDER_COLUMNS if column not in frame.columns
-    ]
+    missing = [column for column in REQUIRED_WORK_ORDER_COLUMNS if column not in frame.columns]
     if missing:
         raise DataContractError(details={"missing_columns": missing})
 
@@ -47,15 +43,11 @@ def summarize_work_orders(
 
     completed_mask = frame[status_column].astype("string").eq(COMPLETED_STATUS)
     completed_count = int(completed_mask.sum())
-    completion_rate = (
-        round(completed_count / total_records, 4) if total_records else 0.0
-    )
+    completion_rate = round(completed_count / total_records, 4) if total_records else 0.0
 
     satisfaction: float | None = None
     if satisfaction_column in frame.columns:
-        valid_satisfaction = pd.to_numeric(
-            frame[satisfaction_column], errors="coerce"
-        ).dropna()
+        valid_satisfaction = pd.to_numeric(frame[satisfaction_column], errors="coerce").dropna()
         if not valid_satisfaction.empty:
             satisfaction = round(float(valid_satisfaction.mean()), 2)
 
@@ -82,9 +74,9 @@ def _group_summary(frame: pd.DataFrame, column: str) -> list[GroupSummary]:
     working = pd.DataFrame(
         {
             "name": frame[column].astype("string").fillna("未填写").str.strip(),
-            "amount": pd.to_numeric(
-                frame[WorkOrderColumn.AMOUNT.value], errors="coerce"
-            ).fillna(0.0),
+            "amount": pd.to_numeric(frame[WorkOrderColumn.AMOUNT.value], errors="coerce").fillna(
+                0.0
+            ),
         }
     )
     grouped = (
@@ -107,9 +99,7 @@ def _preview(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
     if limit <= 0 or frame.empty:
         return []
 
-    columns = [
-        column for column in PREVIEW_WORK_ORDER_COLUMNS if column in frame.columns
-    ]
+    columns = [column for column in PREVIEW_WORK_ORDER_COLUMNS if column in frame.columns]
     records = frame.loc[:, columns].head(limit).to_dict(orient="records")
     return [{key: _json_safe(value) for key, value in row.items()} for row in records]
 

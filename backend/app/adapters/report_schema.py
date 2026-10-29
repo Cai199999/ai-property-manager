@@ -166,9 +166,7 @@ def normalize_report_frame(
     生成可复现的模拟费用，并把满意度档位映射为 1~5 分。这样既保留原始
     导出结构，又能让上层看板继续计算经营指标。
     """
-    missing = [
-        column for column in REQUIRED_REPORT_COLUMNS if column not in frame.columns
-    ]
+    missing = [column for column in REQUIRED_REPORT_COLUMNS if column not in frame.columns]
     if missing:
         raise DataContractError(details={"missing_columns": missing})
 
@@ -188,9 +186,7 @@ def normalize_report_frame(
     result[WorkOrderColumn.OWNER.value] = _derive_owner(source)
 
     satisfaction = _clean_text(source, "满意度").map(SATISFACTION_MAPPING)
-    result[WorkOrderColumn.SATISFACTION.value] = pd.to_numeric(
-        satisfaction, errors="coerce"
-    )
+    result[WorkOrderColumn.SATISFACTION.value] = pd.to_numeric(satisfaction, errors="coerce")
 
     # 费用只对已处理/处理中的维修类工单产生，取消工单归零。
     result[WorkOrderColumn.AMOUNT.value] = _derive_amount(
@@ -256,9 +252,7 @@ def _derive_repair_type(frame: pd.DataFrame) -> pd.Series:
     安防告警、工程维修、住宅报修、客户服务、其他服务。
     """
     ticket_type = _clean_text(frame, "工单类型")
-    service_path = (
-        _clean_text(frame, "工单服务项目") + " " + _clean_text(frame, "服务内容")
-    )
+    service_path = _clean_text(frame, "工单服务项目") + " " + _clean_text(frame, "服务内容")
 
     repair_type = pd.Series("其他服务", index=frame.index, dtype="string")
     repair_type.loc[ticket_type.eq("数智中枢告警工单")] = "安防告警"
@@ -266,9 +260,9 @@ def _derive_repair_type(frame: pd.DataFrame) -> pd.Series:
     repair_type.loc[ticket_type.isin(["客户报事报修", "客户投诉建议"])] = "客户服务"
 
     # 普通提交工单和补单中，只有明确勾选工程维修的才归入工程维修。
-    engineering_mask = ticket_type.isin(
-        ["提交工单", "补单"]
-    ) & service_path.str.contains("工程维修", na=False)
+    engineering_mask = ticket_type.isin(["提交工单", "补单"]) & service_path.str.contains(
+        "工程维修", na=False
+    )
     repair_type.loc[engineering_mask] = "工程维修"
     return repair_type.fillna("其他服务")
 

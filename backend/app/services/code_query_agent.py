@@ -198,9 +198,7 @@ class CodeQueryAgent:
                         self._executor.execute,
                         source.frames[source.primary_table],
                         code,
-                        timeout=min(
-                            self._settings.code_exec_timeout_seconds, remaining
-                        ),
+                        timeout=min(self._settings.code_exec_timeout_seconds, remaining),
                         tables=source.frames,
                         primary_table=source.primary_table,
                     )
@@ -212,9 +210,7 @@ class CodeQueryAgent:
             except SandboxTimeoutError as exc:
                 error_message = sanitize_error_text(exc)
                 retry_errors.append(error_message)
-                logger.info(
-                    "代码执行超时 request_id=%s attempt=%s", request_id, attempt
-                )
+                logger.info("代码执行超时 request_id=%s attempt=%s", request_id, attempt)
                 if attempt >= max_attempts:
                     final_timeout = True
                     break
@@ -378,9 +374,7 @@ class CodeQueryAgent:
             model=None,
             confidence=1.0,
             reason="未指定时间，默认使用数据目录覆盖的完整区间",
-            warnings=(
-                f"未识别到时间范围，已默认汇总 {start_date} 至 {end_date} 的全部数据",
-            ),
+            warnings=(f"未识别到时间范围，已默认汇总 {start_date} 至 {end_date} 的全部数据",),
         )
 
     async def _resolve_source(
@@ -425,9 +419,7 @@ class CodeQueryAgent:
 
         # 同构表组内的每张表都是事实表，必须分别按时间/项目过滤；
         # 只过滤主表会让其他文件保留全量数据，导致跨文件汇总失真。
-        primary_signature = tuple(
-            str(column) for column in primary_dataset.frame.columns
-        )
+        primary_signature = tuple(str(column) for column in primary_dataset.frame.columns)
         fact_names = {
             table.name
             for table in snapshot.tables

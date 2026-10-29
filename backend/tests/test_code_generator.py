@@ -70,11 +70,7 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
             200,
             json={
                 "choices": [
-                    {
-                        "message": {
-                            "content": "```python\nresult_df = source_df.copy()\n```"
-                        }
-                    }
+                    {"message": {"content": "```python\nresult_df = source_df.copy()\n```"}}
                 ]
             },
         )
@@ -104,14 +100,10 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
 
 
 def test_code_generator_requires_api_key() -> None:
-    generator = DeepSeekCodeGenerator(
-        Settings(_env_file=None, deepseek_api_key=SecretStr(""))
-    )
+    generator = DeepSeekCodeGenerator(Settings(_env_file=None, deepseek_api_key=SecretStr("")))
 
     with pytest.raises(LLMServiceError):
-        asyncio.run(
-            generator.complete([{"role": "user", "content": "test"}], timeout=1)
-        )
+        asyncio.run(generator.complete([{"role": "user", "content": "test"}], timeout=1))
     asyncio.run(generator.aclose())
 
 

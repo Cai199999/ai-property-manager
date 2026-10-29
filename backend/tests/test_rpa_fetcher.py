@@ -56,6 +56,4 @@ def test_rpa_fetcher_passes_project_filter_to_project_column(tmp_path: Path) -> 
 
     result = asyncio.run(fetcher.fetch(request))
 
-    assert result.frame[WorkOrderColumn.PROJECT.value].unique().tolist() == [
-        "望京生命科学园"
-    ]
+    assert result.frame[WorkOrderColumn.PROJECT.value].unique().tolist() == ["望京生命科学园"]

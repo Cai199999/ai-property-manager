@@ -29,9 +29,7 @@ def normalize_work_order_frame(
     if looks_like_report_frame(frame):
         return normalize_report_frame(frame, time_range, property_name)
 
-    missing = [
-        column for column in REQUIRED_WORK_ORDER_COLUMNS if column not in frame.columns
-    ]
+    missing = [column for column in REQUIRED_WORK_ORDER_COLUMNS if column not in frame.columns]
     if missing:
         raise DataContractError(
             details={"missing_columns": missing},
@@ -53,8 +51,7 @@ def normalize_work_order_frame(
     # end_date 按闭区间处理：结束日次日 00:00 之前均属于范围内。
     end_exclusive = pd.Timestamp(time_range.end_date + timedelta(days=1))
     normalized = normalized.loc[
-        (normalized[received_column] >= start_at)
-        & (normalized[received_column] < end_exclusive)
+        (normalized[received_column] >= start_at) & (normalized[received_column] < end_exclusive)
     ]
 
     project_column = WorkOrderColumn.PROJECT.value
@@ -69,9 +66,9 @@ def normalize_work_order_frame(
         normalized = normalized.loc[project_mask]
 
     amount_column = WorkOrderColumn.AMOUNT.value
-    normalized[amount_column] = pd.to_numeric(
-        normalized[amount_column], errors="coerce"
-    ).fillna(0.0)
+    normalized[amount_column] = pd.to_numeric(normalized[amount_column], errors="coerce").fillna(
+        0.0
+    )
 
     satisfaction_column = WorkOrderColumn.SATISFACTION.value
     if satisfaction_column in normalized.columns:
@@ -81,10 +78,6 @@ def normalize_work_order_frame(
 
     completed_column = WorkOrderColumn.COMPLETED_AT.value
     if completed_column in normalized.columns:
-        normalized[completed_column] = pd.to_datetime(
-            normalized[completed_column], errors="coerce"
-        )
+        normalized[completed_column] = pd.to_datetime(normalized[completed_column], errors="coerce")
 
-    return normalized.sort_values(WorkOrderColumn.RECEIVED_AT.value).reset_index(
-        drop=True
-    )
+    return normalized.sort_values(WorkOrderColumn.RECEIVED_AT.value).reset_index(drop=True)

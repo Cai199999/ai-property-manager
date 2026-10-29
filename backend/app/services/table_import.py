@@ -110,11 +110,7 @@ class TableImportService:
             snapshot = self._catalog.scan()
 
         dataset = next(
-            (
-                table
-                for table in snapshot.tables
-                if table.path.resolve() == target.resolve()
-            ),
+            (table for table in snapshot.tables if table.path.resolve() == target.resolve()),
             None,
         )
         if dataset is None:

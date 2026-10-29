@@ -94,17 +94,13 @@ class CodeExecutor:
         ``tables`` 提供多表数据；未提供时沿用旧的单表 ``source_df`` 协议。
         """
         if not self._available:
-            raise SandboxUnavailableError(
-                "未找到 bwrap 或虚拟环境解释器，拒绝执行生成代码"
-            )
+            raise SandboxUnavailableError("未找到 bwrap 或虚拟环境解释器，拒绝执行生成代码")
 
         # 执行器再校验一次，避免调用方绕过 CodeGenerator 直接调用 execute。
         validate_generated_code(code, max_chars=self._settings.code_max_code_chars)
 
         frames = _resolve_frames(source_df, tables, primary_table)
-        payload_frames = {
-            name: _serialize_frame(frame) for name, frame in frames.items()
-        }
+        payload_frames = {name: _serialize_frame(frame) for name, frame in frames.items()}
         payload = {
             "code": code,
             "frames": payload_frames,
@@ -167,17 +163,13 @@ class CodeExecutor:
             detail = sanitize_error_text(stderr.decode("utf-8", errors="replace"))
             if "bwrap:" in detail or "namespace" in detail.lower():
                 raise SandboxUnavailableError(f"沙箱启动失败: {detail}")
-            raise SandboxExecutionError(
-                f"沙箱进程异常退出: {detail or process.returncode}"
-            )
+            raise SandboxExecutionError(f"沙箱进程异常退出: {detail or process.returncode}")
 
         try:
             payload_result = json.loads(stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             detail = sanitize_error_text(stderr.decode("utf-8", errors="replace"))
-            raise SandboxExecutionError(
-                f"沙箱返回格式异常: {detail or '非 JSON 响应'}"
-            ) from exc
+            raise SandboxExecutionError(f"沙箱返回格式异常: {detail or '非 JSON 响应'}") from exc
 
         if not isinstance(payload_result, dict):
             raise SandboxExecutionError("沙箱返回格式异常")
@@ -186,9 +178,7 @@ class CodeExecutor:
             error_type = sanitize_error_text(payload_result.get("error_type"), limit=80)
             message = sanitize_error_text(payload_result.get("message"), limit=600)
             line = payload_result.get("line")
-            line_text = (
-                f"（第 {line} 行）" if isinstance(line, int) and line > 0 else ""
-            )
+            line_text = f"（第 {line} 行）" if isinstance(line, int) and line > 0 else ""
             raise SandboxExecutionError(
                 f"{error_type or '执行错误'}: {message or '未知错误'}{line_text}"
             )
@@ -335,9 +325,7 @@ def _validate_result(result: dict[str, Any], settings: Settings) -> dict[str, An
             raise SandboxExecutionError("沙箱结果行结构与列定义不一致")
 
     warnings = result.get("warnings")
-    if not isinstance(warnings, list) or not all(
-        isinstance(item, str) for item in warnings
-    ):
+    if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
         warnings = []
     return {
         "columns": [

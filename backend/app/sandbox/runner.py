@@ -55,9 +55,7 @@ _SAFE_BUILTIN_NAMES = (
     "ZeroDivisionError",
 )
 _SAFE_BUILTINS = {
-    name: getattr(builtins, name)
-    for name in _SAFE_BUILTIN_NAMES
-    if hasattr(builtins, name)
+    name: getattr(builtins, name) for name in _SAFE_BUILTIN_NAMES if hasattr(builtins, name)
 }
 
 
@@ -142,8 +140,7 @@ def _execute(payload: dict[str, Any]) -> dict[str, Any]:
     result_df = namespace.get("result_df")
     if not isinstance(result_df, pd.DataFrame):
         raise TypeError(
-            "result_df 必须是 pandas DataFrame，"
-            f"当前类型是 {type(result_df).__name__}"
+            "result_df 必须是 pandas DataFrame，" f"当前类型是 {type(result_df).__name__}"
         )
 
     max_rows = int(limits.get("max_rows", 5_000))

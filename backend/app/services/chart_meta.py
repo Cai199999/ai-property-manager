@@ -41,9 +41,7 @@ def infer_chart_meta(
         for name, column in zip(names, columns)
         if _is_numeric_dtype(str(column.get("dtype", "")))
     ]
-    categories = [
-        name for name in names if name not in numeric and _has_values(rows, name)
-    ]
+    categories = [name for name in names if name not in numeric and _has_values(rows, name)]
 
     if not numeric or not categories:
         return ChartMeta(type="table", title="查询结果", x=None, y=[], series=[])
@@ -57,9 +55,7 @@ def infer_chart_meta(
     elif len(y_names) == 1 and _distinct_count(rows, x_name) <= 6:
         chart_type = "pie"
 
-    series = [
-        ChartSeries(name=name, key=name, unit=_infer_unit(name)) for name in y_names
-    ]
+    series = [ChartSeries(name=name, key=name, unit=_infer_unit(name)) for name in y_names]
     return ChartMeta(
         type=chart_type,
         title=f"{y_names[0]}按{x_name}",

@@ -164,9 +164,7 @@ def _sample_region_frame(
     # 区域前缀让三个文件的单号不重复，便于对照 nunique 结果。
     frame["单号"] = frame["单号"].map(lambda value: f"{spec['prefix']}-{value}")
     frame = frame.loc[:, list(REPORT_COLUMNS)]
-    return frame.sort_values("登记时间", ascending=False, kind="stable").reset_index(
-        drop=True
-    )
+    return frame.sort_values("登记时间", ascending=False, kind="stable").reset_index(drop=True)
 
 
 def write_table_workbook(

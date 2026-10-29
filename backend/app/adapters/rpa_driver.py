@@ -188,9 +188,7 @@ class SimulatedRpaExportDriver:
 
         frame = pd.DataFrame.from_records(records, columns=list(REPORT_COLUMNS))
         # 真实系统按登记时间倒序导出，这里保持同样的阅读顺序。
-        return frame.sort_values(
-            "登记时间", ascending=False, kind="stable"
-        ).reset_index(drop=True)
+        return frame.sort_values("登记时间", ascending=False, kind="stable").reset_index(drop=True)
 
     def _daily_count(self, rng: random.Random, property_name: str | None) -> int:
         """按真实导出件的日均单量生成每天的数据量。"""
@@ -231,14 +229,10 @@ class SimulatedRpaExportDriver:
         row["处理状态"] = status
         row["流程名称"] = _flow_name(ticket_type)
         row["登记人"] = "Admin" if is_alarm else rng.choice(self._PEOPLE)
-        row["紧急程度"] = (
-            "紧急" if is_alarm else ("普通" if rng.random() < 0.88 else "紧急")
-        )
+        row["紧急程度"] = "紧急" if is_alarm else ("普通" if rng.random() < 0.88 else "紧急")
         row["数据来源"] = _data_source(rng, is_alarm)
         row["户内公区"] = _indoor_or_public(rng, ticket_type)
-        row["任务时间"] = _format_datetime(
-            received_at + timedelta(minutes=rng.randint(0, 5))
-        )
+        row["任务时间"] = _format_datetime(received_at + timedelta(minutes=rng.randint(0, 5)))
         row["当前节点人"] = rng.choice(self._PEOPLE)
 
         service_kind = self._fill_service_fields(rng, row, ticket_type)
@@ -284,9 +278,7 @@ class SimulatedRpaExportDriver:
             sequence["alarm"] += 1
             return f"{current:%Y%m%d}-{sequence['alarm']:03d}"
 
-        prefix = (
-            self._project_meta(project)[1] if self._project_meta(project) else "GEN"
-        )
+        prefix = self._project_meta(project)[1] if self._project_meta(project) else "GEN"
         letter = "B" if ticket_type == "补单" else "G"
         key = f"{prefix}-{letter}"
         sequence[key] += 1
@@ -329,9 +321,7 @@ class SimulatedRpaExportDriver:
             )
             row["服务内容"] = f"【业务类型】{project_label}/工程维修/{path}[]"
         elif service_kind == "其他服务" and rng.random() < 0.55:
-            row["服务内容"] = (
-                f"【业务类型】{project_label}/其他服务/其他服务/其他类/其他服务[]"
-            )
+            row["服务内容"] = f"【业务类型】{project_label}/其他服务/其他服务/其他类/其他服务[]"
         return service_kind
 
     def _problem_description(
@@ -461,21 +451,13 @@ class SimulatedRpaExportDriver:
         row["收单时间"] = _format_datetime(accepted_at)
         row["接单时间"] = _format_datetime(accepted_at)
         row["到场时间"] = _format_datetime(arrival_at)
-        row["接单时效"] = str(
-            max(0, int((accepted_at - received_at).total_seconds() // 60))
-        )
-        row["到达现场时效"] = str(
-            max(0, int((arrival_at - accepted_at).total_seconds() // 60))
-        )
+        row["接单时效"] = str(max(0, int((accepted_at - received_at).total_seconds() // 60)))
+        row["到达现场时效"] = str(max(0, int((arrival_at - accepted_at).total_seconds() // 60)))
         if completed_at:
             row["完成时间"] = _format_datetime(completed_at)
-            row["处理时效"] = str(
-                max(0, int((completed_at - arrival_at).total_seconds() // 60))
-            )
+            row["处理时效"] = str(max(0, int((completed_at - arrival_at).total_seconds() // 60)))
         if service_kind == "工程维修" and rng.random() < 0.25:
-            row["使用材料"] = (
-                f"({rng.randint(1, 4):.2f}){rng.choice(('个', '套', '支', '包'))};"
-            )
+            row["使用材料"] = f"({rng.randint(1, 4):.2f}){rng.choice(('个', '套', '支', '包'))};"
         return completed_at
 
     def _fill_outcome(
@@ -492,9 +474,7 @@ class SimulatedRpaExportDriver:
             row["当前节点"] = "结束"
             row["处理内容"] = _handling_result(rng, ticket_type, service_kind)
         elif status == "处理中":
-            row["当前节点"] = rng.choice(
-                ("处理", "项目安保经理", "工程经理", "回访", "经理复核")
-            )
+            row["当前节点"] = rng.choice(("处理", "项目安保经理", "工程经理", "回访", "经理复核"))
             if rng.random() < 0.45:
                 row["处理内容"] = _handling_result(rng, ticket_type, service_kind)
             if rng.random() < 0.35:
@@ -605,9 +585,7 @@ def _weighted_choice(rng: random.Random, options: tuple[tuple[str, int], ...]) -
     return rng.choices(values, weights=weights, k=1)[0]
 
 
-def _weighted_project(
-    rng: random.Random, projects: tuple[tuple[str, str, float], ...]
-) -> str:
+def _weighted_project(rng: random.Random, projects: tuple[tuple[str, str, float], ...]) -> str:
     values = [name for name, _, _ in projects]
     weights = [weight for _, _, weight in projects]
     return rng.choices(values, weights=weights, k=1)[0]
@@ -637,9 +615,7 @@ def _data_source(rng: random.Random, is_alarm: bool) -> str:
 def _indoor_or_public(rng: random.Random, ticket_type: str) -> str:
     if ticket_type == "数智中枢告警工单":
         return ""
-    return rng.choices(("公区", "租区", "机房", "户内"), weights=(72, 13, 13, 2), k=1)[
-        0
-    ]
+    return rng.choices(("公区", "租区", "机房", "户内"), weights=(72, 13, 13, 2), k=1)[0]
 
 
 def _random_datetime(rng: random.Random, current: date) -> datetime:
