@@ -1,16 +1,17 @@
 // 数据来源：POST /api/v1/assistant/query（经 Java 网关返回）
 window.ASSISTANT_RESPONSE = {
-  "request_id": "e2e-demo-20261029",
-  "query": "汇总上个月樱花苑的工单数据",
+  "request_id": "dashboard-refresh-20261029-113743",
+  "query": "汇总上个月的工单数据",
   "data_source": "rpa",
   "time_range": {
     "start_date": "2026-09-01",
     "end_date": "2026-09-30"
   },
   "parser": {
-    "engine": "rule_based",
-    "confidence": 0.92,
-    "reason": "命中相对时间表达「上个月」"
+    "engine": "deepseek",
+    "model": "deepseek-chat",
+    "confidence": 0.99,
+    "reason": "用户指定了上个月，即上一个自然月的完整区间"
   },
   "summary": {
     "total_records": 102,
@@ -281,12 +282,10 @@ window.ASSISTANT_RESPONSE = {
     }
   ],
   "meta": {
-    "fetched_at": "2026-10-29T11:10:55.871195+08:00",
-    "elapsed_ms": 412,
+    "fetched_at": "2026-10-29T11:37:45.320878+08:00",
+    "elapsed_ms": 1536,
     "row_count": 102,
-    "source_file": "property_work_orders_2026-09-01_2026-09-30_abba1dbc.xlsx",
-    "warnings": [
-      "未配置 DEEPSEEK_API_KEY，已降级为本地规则解析。"
-    ]
+    "source_file": "property_work_orders_2026-09-01_2026-09-30_a6b7dea1.xlsx",
+    "warnings": []
   }
 };
