@@ -323,6 +323,38 @@
       font-weight: 550;
     }
 
+    .query-warnings {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--series-4);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--series-4) 9%, transparent);
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .query-warnings-title {
+      color: var(--text-primary);
+      font-weight: 650;
+    }
+
+    .query-warnings ul {
+      margin: 4px 0 0;
+      padding-left: 18px;
+    }
+
+    .query-warnings li + li {
+      margin-top: 2px;
+    }
+
+    .query-feedback[hidden],
+    .query-warnings[hidden],
+    .empty-state[hidden],
+    #resultsRoot[hidden] {
+      display: none;
+    }
+
     .chart-card.is-refreshing .chart-layout,
     .chart-card.is-refreshing .chart-footnote {
       opacity: 0.45;
@@ -781,7 +813,7 @@
           <span>工单分析</span>
         </div>
         <h1>物业工单月报</h1>
-        <p class="subtitle" id="pageSubtitle">正在读取数据快照…</p>
+        <p class="subtitle" id="pageSubtitle">输入自然语言，查询工单数据并生成实时看板。</p>
       </div>
 
       <div class="toolbar" role="group" aria-label="页面显示选项">
@@ -826,9 +858,16 @@
         <div class="query-feedback" id="queryFeedback" hidden>
           <p class="query-status" id="queryStatus" role="status" aria-live="polite" hidden></p>
           <p class="query-error" id="queryError" role="alert" hidden></p>
+          <div class="query-warnings" id="queryWarnings" role="status" hidden>
+            <strong class="query-warnings-title">查询警告</strong>
+            <ul id="queryWarningList"></ul>
+          </div>
         </div>
       </section>
 
+      <div class="empty-state" id="emptyState">请输入自然语言开始查询</div>
+
+      <div id="resultsRoot" hidden>
       <section class="stats" aria-label="关键指标">
         <article class="stat-card">
           <p class="stat-label">工单总量</p>
@@ -889,9 +928,10 @@
           </table>
         </div>
       </section>
+      </div>
 
       <div class="empty-state" id="errorState" hidden>
-        数据未加载。请确认 <code>data/assistant-response.js</code> 存在，并通过本地静态服务器打开页面。
+        页面资源加载异常，请刷新后重试。
       </div>
 
       <noscript>
@@ -900,18 +940,17 @@
     </main>
 
     <footer class="page-footer">
-      <span id="snapshotMeta">—</span>
-      <span>数据快照 · AI 物管助手</span>
+      <span id="queryMeta">尚未查询</span>
+      <span>实时查询 · AI 物管助手</span>
     </footer>
   </div>
 
   <script src="vendor/echarts.min.js"></script>
-  <script src="data/assistant-response.js"></script>
   <script>
     (() => {
       "use strict";
 
-      let data = window.ASSISTANT_RESPONSE;
+      let data = null;
       const root = document.documentElement;
       const themeButton = document.getElementById("themeButton");
       const textureButton = document.getElementById("textureButton");
@@ -921,6 +960,8 @@
       const legendRoot = document.getElementById("repairLegend");
       const chartElement = document.getElementById("repairChart");
       const chartCard = document.getElementById("chartCard");
+      const emptyState = document.getElementById("emptyState");
+      const resultsRoot = document.getElementById("resultsRoot");
       const errorState = document.getElementById("errorState");
       const queryForm = document.getElementById("queryForm");
       const queryInput = document.getElementById("queryInput");
@@ -929,7 +970,12 @@
       const queryFeedback = document.getElementById("queryFeedback");
       const queryStatus = document.getElementById("queryStatus");
       const queryError = document.getElementById("queryError");
+      const queryWarnings = document.getElementById("queryWarnings");
+      const queryWarningList = document.getElementById("queryWarningList");
+      const queryMeta = document.getElementById("queryMeta");
       const queryEndpoint = "http://127.0.0.1:8080/api/v1/assistant/query";
+      const emptyPrompt = "请输入自然语言开始查询";
+      const emptyResultMessage = "该时间范围内没有符合条件的工单";
       const projectNames = Object.freeze([
         "望京国际研发园",
         "望京生命科学园",
@@ -1196,12 +1242,6 @@
             `<strong>${escapeHtml(top.name)}</strong> 最多，占 ${share}%；前两类合计占 ${topTwoShare}%。`;
         }
 
-        const snapshot = data.meta && data.meta.fetched_at
-          ? new Date(data.meta.fetched_at).toLocaleString("zh-CN", { hour12: false })
-          : "—";
-        document.getElementById("snapshotMeta").innerHTML =
-          `快照 ${escapeHtml(snapshot)} · 解析 ${escapeHtml(data.parser?.engine || "unknown")} · 请求 <code>${escapeHtml(data.request_id || "—")}</code>`;
-
         renderLegend();
         renderTable();
         return true;
@@ -1232,6 +1272,50 @@
         );
       };
 
+      const showEmptyState = (message) => {
+        emptyState.textContent = message;
+        emptyState.hidden = false;
+        resultsRoot.hidden = true;
+        errorState.hidden = true;
+        tableCard.hidden = true;
+        tableButton.setAttribute("aria-expanded", "false");
+        tableButton.textContent = "数据表";
+      };
+
+      const showResults = () => {
+        emptyState.hidden = true;
+        resultsRoot.hidden = false;
+      };
+
+      const renderQueryWarnings = (warnings) => {
+        const items = Array.isArray(warnings)
+          ? warnings.filter((warning) => typeof warning === "string" && warning.trim())
+          : [];
+        queryWarningList.replaceChildren();
+        if (items.length === 0) {
+          queryWarnings.hidden = true;
+          return;
+        }
+        items.forEach((warning) => {
+          const item = document.createElement("li");
+          item.textContent = warning;
+          queryWarningList.appendChild(item);
+        });
+        queryWarnings.hidden = false;
+      };
+
+      const updateQueryFooter = (payload) => {
+        const fetchedAt = payload.meta?.fetched_at;
+        const date = fetchedAt ? new Date(fetchedAt) : null;
+        const queryTime = date && !Number.isNaN(date.getTime())
+          ? date.toLocaleString("zh-CN", { hour12: false })
+          : "—";
+        queryMeta.innerHTML =
+          `查询时间 ${escapeHtml(queryTime)} · `
+          + `解析引擎 ${escapeHtml(payload.parser?.engine || "unknown")} · `
+          + `请求 <code>${escapeHtml(payload.request_id || "—")}</code>`;
+      };
+
       const showQueryStatus = (message, state) => {
         queryFeedback.hidden = false;
         queryError.hidden = true;
@@ -1249,6 +1333,7 @@
         queryStatus.classList.remove("is-loading", "is-success");
         queryError.hidden = false;
         queryError.textContent = message;
+        renderQueryWarnings([]);
       };
 
       const setQuerying = (loading) => {
@@ -1267,16 +1352,6 @@
         queryProject.value = matched || "";
       };
 
-      const engineLabel = (engine) => {
-        if (engine === "deepseek") {
-          return "DeepSeek 解析";
-        }
-        if (engine === "rule_based") {
-          return "规则解析";
-        }
-        return engine || "未知解析";
-      };
-
       const isRenderableResponse = (payload) => Boolean(
         payload
         && payload.summary
@@ -1285,6 +1360,66 @@
         && payload.time_range.start_date
         && payload.time_range.end_date
       );
+
+      const isEmptyResult = (payload) => Number(payload?.summary?.total_records || 0) <= 0;
+
+      const applyPayload = (payload) => {
+        data = payload;
+        updateQueryFooter(payload);
+        renderQueryWarnings(payload.meta?.warnings);
+
+        if (isEmptyResult(payload)) {
+          const project = queryProject.value || "全部项目";
+          const start = formatDate(payload.time_range.start_date);
+          const end = formatDate(payload.time_range.end_date);
+          document.getElementById("pageSubtitle").innerHTML =
+            `<strong>${escapeHtml(project)}</strong> · ${start} — ${end} · 0 单`;
+          showEmptyState(emptyResultMessage);
+          return "empty";
+        }
+
+        // ECharts 需要在容器可见时初始化，否则首次渲染宽度会是 0。
+        showResults();
+        if (!hydrate()) {
+          throw new Error("查询结果无法渲染，已保留上一次结果。");
+        }
+        if (!chart) {
+          initChart();
+        } else {
+          renderChart();
+        }
+        updateChartAria();
+        return "rendered";
+      };
+
+      const restorePreviousData = (payload) => {
+        if (!payload) {
+          data = null;
+          queryMeta.textContent = "尚未查询";
+          renderQueryWarnings([]);
+          showEmptyState(emptyPrompt);
+          return;
+        }
+
+        try {
+          applyPayload(payload);
+        } catch {
+          data = null;
+          queryMeta.textContent = "尚未查询";
+          renderQueryWarnings([]);
+          showEmptyState(emptyPrompt);
+        }
+      };
+
+      const httpErrorMessage = (status, payload) => {
+        if (status === 422) {
+          return payload?.error?.message || "请求参数校验失败";
+        }
+        if (status === 502) {
+          return "Java 网关转发失败";
+        }
+        return payload?.error?.message || `查询失败（HTTP ${status}）`;
+      };
 
       queryInput.addEventListener("input", syncProjectFromMessage);
 
@@ -1312,21 +1447,32 @@
         const timeoutId = window.setTimeout(() => controller.abort(), 75000);
 
         setQuerying(true);
+        renderQueryWarnings([]);
         showQueryStatus("正在查询，请稍候…", "loading");
 
         try {
-          const response = await fetch(queryEndpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            // 按接口契约只提交 message 与 property_name。
-            body: JSON.stringify({
-              message,
-              property_name: propertyName
-            }),
-            signal: controller.signal
-          });
+          let response;
+          try {
+            response = await fetch(queryEndpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              // 按接口契约只提交 message 与 property_name。
+              body: JSON.stringify({
+                message,
+                property_name: propertyName
+              }),
+              signal: controller.signal
+            });
+          } catch (error) {
+            if (error.name === "AbortError") {
+              throw error;
+            }
+            const networkError = new Error("无法连接 8080，请确认网关和 CORS");
+            networkError.name = "QueryNetworkError";
+            throw networkError;
+          }
 
           let payload = null;
           try {
@@ -1336,46 +1482,26 @@
           }
 
           if (!response.ok) {
-            const detail = payload?.error?.message || `HTTP ${response.status}`;
-            const code = payload?.error?.code ? `（${payload.error.code}）` : "";
-            throw new Error(`查询失败（HTTP ${response.status}）：${detail}${code}`);
+            throw new Error(httpErrorMessage(response.status, payload));
           }
 
           if (!isRenderableResponse(payload)) {
             throw new Error("查询返回的数据结构不完整，已保留上一次结果。");
           }
 
-          data = payload;
-          if (!hydrate()) {
-            throw new Error("查询结果无法渲染，已保留上一次结果。");
-          }
-
-          if (!chart) {
-            initChart();
-          } else {
-            renderChart();
-          }
-          updateChartAria();
+          applyPayload(payload);
           showQueryStatus(
-            `查询完成 · ${numberFormatter.format(payload.summary.total_records)} 单 · `
-              + `${engineLabel(payload.parser?.engine)} · 请求 ${payload.request_id || "—"}`,
+            `查询完成 · ${numberFormatter.format(payload.summary.total_records)} 单`,
             "success"
           );
         } catch (error) {
-          // 任何失败都回滚到查询前的数据，旧图表继续可用。
+          // 仅当本次请求已经覆盖旧数据时才回滚，普通失败继续保留旧结果。
           if (data !== previousData) {
-            data = previousData;
-            hydrate();
-            if (chart) {
-              renderChart();
-            }
-            updateChartAria();
+            restorePreviousData(previousData);
           }
 
           if (error.name === "AbortError") {
             showQueryError("查询超时，请稍后重试。");
-          } else if (error instanceof TypeError) {
-            showQueryError("无法连接查询服务，请确认网关 8080 已启动，并检查跨域配置。");
           } else {
             showQueryError(error.message || "查询失败，请稍后重试。");
           }
@@ -1404,6 +1530,9 @@
       });
 
       tableButton.addEventListener("click", () => {
+        if (resultsRoot.hidden) {
+          return;
+        }
         const willOpen = tableCard.hidden;
         tableCard.hidden = !willOpen;
         tableButton.setAttribute("aria-expanded", String(willOpen));
@@ -1424,11 +1553,9 @@
 
       initialiseTheme();
       textureButton.setAttribute("aria-pressed", String(textureEnabled));
-
-      if (hydrate()) {
-        initChart();
-        updateChartAria();
-      }
+      showEmptyState(emptyPrompt);
+      queryMeta.textContent = "尚未查询";
+      renderQueryWarnings([]);
     })();
   </script>
 </body>
