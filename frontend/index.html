@@ -213,7 +213,7 @@
 
     .query-form {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 220px auto;
+      grid-template-columns: minmax(0, 1fr) 220px auto auto;
       align-items: end;
       gap: 12px;
     }
@@ -282,6 +282,69 @@
     .query-button:disabled {
       cursor: wait;
       opacity: 0.68;
+    }
+
+    .query-button--secondary {
+      border-color: var(--hairline);
+      background: transparent;
+      color: var(--text-primary);
+    }
+
+    .query-button--secondary:hover:not(:disabled) {
+      border-color: var(--text-muted);
+      background: var(--page);
+    }
+
+    .table-catalog {
+      margin-top: 14px;
+      padding-top: 13px;
+      border-top: 1px solid var(--hairline);
+    }
+
+    .table-catalog-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 9px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .table-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 7px 11px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      background: var(--page);
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .table-chip strong {
+      color: var(--text-primary);
+      font-weight: 650;
+    }
+
+    .table-chip.is-primary {
+      border-color: var(--accent);
+      background: var(--accent-wash);
+    }
+
+    .table-chip .table-chip-role {
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .upload-status {
+      margin-top: 10px;
+    }
+
+    .upload-status.is-error {
+      color: var(--danger);
     }
 
     .query-feedback {
@@ -854,7 +917,17 @@
             </select>
           </div>
           <button class="query-button" id="queryButton" type="submit">查询</button>
+          <button class="query-button query-button--secondary" id="uploadButton"
+                  type="button" title="导入 .xlsx 文件，最大 20 MB">导入文件</button>
+          <input id="uploadInput" type="file"
+                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         </form>
+        <p class="query-status upload-status" id="uploadStatus" role="status"
+           aria-live="polite" hidden></p>
+        <div class="table-catalog" id="tableCatalog" hidden>
+          <p class="query-label">当前数据表</p>
+          <ul class="table-catalog-list" id="tableCatalogList"></ul>
+        </div>
         <div class="query-feedback" id="queryFeedback" hidden>
           <p class="query-status" id="queryStatus" role="status" aria-live="polite" hidden></p>
           <p class="query-error" id="queryError" role="alert" hidden></p>
@@ -973,7 +1046,15 @@
       const queryWarnings = document.getElementById("queryWarnings");
       const queryWarningList = document.getElementById("queryWarningList");
       const queryMeta = document.getElementById("queryMeta");
+      const uploadButton = document.getElementById("uploadButton");
+      const uploadInput = document.getElementById("uploadInput");
+      const uploadStatus = document.getElementById("uploadStatus");
+      const tableCatalog = document.getElementById("tableCatalog");
+      const tableCatalogList = document.getElementById("tableCatalogList");
       const queryEndpoint = "http://127.0.0.1:8080/api/v1/assistant/query";
+      const tableEndpoint = "http://127.0.0.1:8000/api/v1/assistant/tables";
+      const uploadEndpoint = `${tableEndpoint}/upload`;
+      const maxUploadBytes = 20 * 1024 * 1024;
       const emptyPrompt = "请输入自然语言开始查询";
       const emptyResultMessage = "该时间范围内没有符合条件的工单";
       const projectNames = Object.freeze([
@@ -995,6 +1076,7 @@
       let textureEnabled = contrastMedia.matches;
       let projectManuallySelected = false;
       let isQuerying = false;
+      let isUploading = false;
 
       const numberFormatter = new Intl.NumberFormat("zh-CN");
       const currencyFormatter = new Intl.NumberFormat("zh-CN", {
@@ -1428,6 +1510,125 @@
         projectManuallySelected = true;
       });
 
+      const showUploadStatus = (message, kind) => {
+        uploadStatus.textContent = message;
+        uploadStatus.classList.toggle("is-error", kind === "error");
+        uploadStatus.classList.toggle("is-loading", kind === "loading");
+        uploadStatus.hidden = !message;
+      };
+
+      const setUploading = (value) => {
+        uploadButton.disabled = value;
+        uploadButton.textContent = value ? "导入中…" : "导入文件";
+      };
+
+      const renderTableCatalog = (tables, primaryTable) => {
+        if (!Array.isArray(tables) || tables.length === 0) {
+          tableCatalog.hidden = true;
+          tableCatalogList.replaceChildren();
+          return;
+        }
+
+        tableCatalogList.innerHTML = tables.map((table) => {
+          const roleLabel = table.role === "fact"
+            ? "事实表"
+            : (table.role === "dimension" ? "维表" : "数据表");
+          const primaryClass = table.name === primaryTable ? " is-primary" : "";
+          return `
+            <li class="table-chip${primaryClass}">
+              <strong>${escapeHtml(table.name)}</strong>
+              <span>${numberFormatter.format(table.row_count)} 行</span>
+              <span>${numberFormatter.format(table.column_count)} 列</span>
+              <span class="table-chip-role">${roleLabel}</span>
+            </li>
+          `;
+        }).join("");
+        tableCatalog.hidden = false;
+      };
+
+      const loadTableCatalog = async () => {
+        try {
+          const response = await fetch(tableEndpoint, {
+            headers: { Accept: "application/json" },
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            return;
+          }
+          const payload = await response.json();
+          renderTableCatalog(payload.tables, payload.primary_table);
+        } catch {
+          // Python 服务未启动时静默隐藏，不影响现有看板查询。
+        }
+      };
+
+      const handleUpload = async () => {
+        if (isUploading) {
+          return;
+        }
+        const file = uploadInput.files && uploadInput.files[0];
+        uploadInput.value = "";
+        if (!file) {
+          return;
+        }
+        if (!file.name.toLowerCase().endsWith(".xlsx")) {
+          showUploadStatus("只支持 .xlsx 文件。", "error");
+          return;
+        }
+        if (file.size > maxUploadBytes) {
+          showUploadStatus("文件超过 20 MB 限制。", "error");
+          return;
+        }
+
+        isUploading = true;
+        setUploading(true);
+        showUploadStatus(`正在导入 ${file.name}…`, "loading");
+
+        try {
+          const formData = new FormData();
+          formData.append("file", file, file.name);
+          const response = await fetch(uploadEndpoint, {
+            method: "POST",
+            body: formData
+          });
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch {
+            payload = null;
+          }
+          if (!response.ok) {
+            throw new Error(
+              payload?.error?.message || `导入失败（HTTP ${response.status}）`
+            );
+          }
+
+          renderTableCatalog(payload.tables, payload.primary_table);
+          const imported = payload.imported;
+          let message = `已导入 ${imported.name} · `
+            + `${numberFormatter.format(imported.row_count)} 行 × `
+            + `${numberFormatter.format(imported.column_count)} 列`;
+          if (Array.isArray(payload.warnings) && payload.warnings.length) {
+            message += ` · ${payload.warnings.join("；")}`;
+          }
+          showUploadStatus(message, "success");
+        } catch (error) {
+          showUploadStatus(error.message || "导入失败，请稍后重试。", "error");
+        } finally {
+          isUploading = false;
+          setUploading(false);
+        }
+      };
+
+      uploadButton.addEventListener("click", () => {
+        if (!isUploading) {
+          uploadInput.click();
+        }
+      });
+      uploadInput.addEventListener("change", () => {
+        void handleUpload();
+      });
+
       queryForm.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (isQuerying) {
@@ -1556,6 +1757,7 @@
       showEmptyState(emptyPrompt);
       queryMeta.textContent = "尚未查询";
       renderQueryWarnings([]);
+      void loadTableCatalog();
     })();
   </script>
 </body>

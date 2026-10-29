@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pandas as pd
@@ -11,9 +12,12 @@ from app.core.exceptions import LLMServiceError
 from app.schemas.assistant import TimeRange
 from app.services.code_generator import (
     DeepSeekCodeGenerator,
+    build_catalog_profile,
     build_initial_messages,
     build_table_profile,
 )
+from app.services.mock_tables import generate_mock_tables
+from app.services.table_catalog import TableCatalog
 
 
 def _frame() -> pd.DataFrame:
@@ -66,7 +70,11 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
             200,
             json={
                 "choices": [
-                    {"message": {"content": "```python\nresult_df = source_df.copy()\n```"}}
+                    {
+                        "message": {
+                            "content": "```python\nresult_df = source_df.copy()\n```"
+                        }
+                    }
                 ]
             },
         )
@@ -96,8 +104,44 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
 
 
 def test_code_generator_requires_api_key() -> None:
-    generator = DeepSeekCodeGenerator(Settings(_env_file=None, deepseek_api_key=SecretStr("")))
+    generator = DeepSeekCodeGenerator(
+        Settings(_env_file=None, deepseek_api_key=SecretStr(""))
+    )
 
     with pytest.raises(LLMServiceError):
-        asyncio.run(generator.complete([{"role": "user", "content": "test"}], timeout=1))
+        asyncio.run(
+            generator.complete([{"role": "user", "content": "test"}], timeout=1)
+        )
     asyncio.run(generator.aclose())
+
+
+def test_multi_table_prompt_contains_relationships_and_merge_rules(
+    tmp_path: Path,
+) -> None:
+    generate_mock_tables(tmp_path)
+    snapshot = TableCatalog(Settings(_env_file=None, data_table_dir=tmp_path)).scan()
+    time_range = TimeRange(start_date="2026-09-01", end_date="2026-09-30")
+    frames = {table.name: table.frame for table in snapshot.tables}
+    profile = build_catalog_profile(
+        snapshot.tables,
+        frames=frames,
+        time_range=time_range,
+        data_source="directory",
+        primary_table=snapshot.primary_table or "",
+        time_filtered=True,
+        relationships=snapshot.relationships,
+        sample_rows=2,
+    )
+
+    messages = build_initial_messages("按项目区域统计工单量", profile)
+    prompt = messages[1]["content"]
+
+    assert "catalog_profile" in prompt
+    assert "工单表" in prompt
+    assert "项目表" in prompt
+    assert "项目编号" in prompt
+    assert "pd.merge" in messages[0]["content"]
+    assert "manifest" in messages[1]["content"]
+    assert "T-" not in prompt
+    # 单号等直接标识在样例中必须脱敏。
+    assert "202609" not in prompt

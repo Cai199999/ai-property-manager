@@ -34,6 +34,25 @@ class Settings(BaseSettings):
     rpa_download_dir: Path = Path(".runtime/rpa_downloads")
     rpa_simulate_delay_seconds: float = Field(default=0.0, ge=0.0, le=10.0)
 
+    # 多表目录：存在 Excel 时，代码查询优先使用目录中的多表数据。
+    table_directory_enabled: bool = True
+    data_table_dir: Path = Path(".runtime/rpa_downloads/tables")
+    table_max_files: int = Field(default=8, ge=1, le=50)
+    table_max_rows: int = Field(default=50_000, ge=1, le=500_000)
+    table_max_columns: int = Field(default=100, ge=1, le=500)
+    table_upload_max_bytes: int = Field(
+        default=20_000_000,
+        ge=100_000,
+        le=100_000_000,
+    )
+    table_upload_max_uncompressed_bytes: int = Field(
+        default=200_000_000,
+        ge=1_000_000,
+        le=1_000_000_000,
+    )
+    # 前端 8081 直传 FastAPI 时需要的跨域白名单，逗号分隔。
+    cors_origins: str = "http://127.0.0.1:8081,http://localhost:8081"
+
     property_api_base_url: str = ""
     property_api_key: SecretStr = SecretStr("")
 
@@ -54,7 +73,9 @@ class Settings(BaseSettings):
     code_max_result_rows: int = Field(default=5_000, ge=1, le=100_000)
     code_max_result_columns: int = Field(default=50, ge=1, le=500)
     code_max_cell_chars: int = Field(default=1_000, ge=10, le=20_000)
-    code_max_payload_bytes: int = Field(default=20_000_000, ge=1_000_000, le=100_000_000)
+    code_max_payload_bytes: int = Field(
+        default=20_000_000, ge=1_000_000, le=100_000_000
+    )
     code_sample_rows: int = Field(default=5, ge=1, le=20)
     code_expose_generated_code: bool = True
 
@@ -86,6 +107,13 @@ class Settings(BaseSettings):
     def deepseek_key(self) -> str:
         """返回明文 Key，仅在构造 HTTP 请求头时使用。"""
         return self.deepseek_api_key.get_secret_value().strip()
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """把环境变量中的逗号分隔白名单转成列表。"""
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
 
     @property
     def tz(self) -> ZoneInfo:

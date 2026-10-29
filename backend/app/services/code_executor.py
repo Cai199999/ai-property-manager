@@ -16,7 +16,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -86,23 +86,37 @@ class CodeExecutor:
         code: str,
         *,
         timeout: float | None = None,
+        tables: Mapping[str, pd.DataFrame] | None = None,
+        primary_table: str | None = None,
     ) -> CodeExecutionResult:
-        """执行代码并返回 JSON 安全的结果表。"""
+        """执行代码并返回 JSON 安全的结果表。
+
+        ``tables`` 提供多表数据；未提供时沿用旧的单表 ``source_df`` 协议。
+        """
         if not self._available:
-            raise SandboxUnavailableError("未找到 bwrap 或虚拟环境解释器，拒绝执行生成代码")
+            raise SandboxUnavailableError(
+                "未找到 bwrap 或虚拟环境解释器，拒绝执行生成代码"
+            )
 
         # 执行器再校验一次，避免调用方绕过 CodeGenerator 直接调用 execute。
         validate_generated_code(code, max_chars=self._settings.code_max_code_chars)
 
-        frame_payload = _serialize_frame(source_df)
+        frames = _resolve_frames(source_df, tables, primary_table)
+        payload_frames = {
+            name: _serialize_frame(frame) for name, frame in frames.items()
+        }
         payload = {
             "code": code,
-            "frame": frame_payload,
+            "frames": payload_frames,
+            "primary_table": primary_table or next(iter(frames)),
             "limits": {
                 "max_rows": self._settings.code_max_result_rows,
                 "max_columns": self._settings.code_max_result_columns,
                 "max_cell_chars": self._settings.code_max_cell_chars,
                 "max_output_bytes": 5_000_000,
+                "max_tables": self._settings.table_max_files,
+                "max_frame_rows": self._settings.table_max_rows,
+                "max_frame_columns": self._settings.table_max_columns,
             },
         }
         payload_bytes = json.dumps(
@@ -153,13 +167,17 @@ class CodeExecutor:
             detail = sanitize_error_text(stderr.decode("utf-8", errors="replace"))
             if "bwrap:" in detail or "namespace" in detail.lower():
                 raise SandboxUnavailableError(f"沙箱启动失败: {detail}")
-            raise SandboxExecutionError(f"沙箱进程异常退出: {detail or process.returncode}")
+            raise SandboxExecutionError(
+                f"沙箱进程异常退出: {detail or process.returncode}"
+            )
 
         try:
             payload_result = json.loads(stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             detail = sanitize_error_text(stderr.decode("utf-8", errors="replace"))
-            raise SandboxExecutionError(f"沙箱返回格式异常: {detail or '非 JSON 响应'}") from exc
+            raise SandboxExecutionError(
+                f"沙箱返回格式异常: {detail or '非 JSON 响应'}"
+            ) from exc
 
         if not isinstance(payload_result, dict):
             raise SandboxExecutionError("沙箱返回格式异常")
@@ -168,7 +186,9 @@ class CodeExecutor:
             error_type = sanitize_error_text(payload_result.get("error_type"), limit=80)
             message = sanitize_error_text(payload_result.get("message"), limit=600)
             line = payload_result.get("line")
-            line_text = f"（第 {line} 行）" if isinstance(line, int) and line > 0 else ""
+            line_text = (
+                f"（第 {line} 行）" if isinstance(line, int) and line > 0 else ""
+            )
             raise SandboxExecutionError(
                 f"{error_type or '执行错误'}: {message or '未知错误'}{line_text}"
             )
@@ -235,6 +255,36 @@ class CodeExecutor:
         return command
 
 
+def _resolve_frames(
+    source_df: pd.DataFrame,
+    tables: Mapping[str, pd.DataFrame] | None,
+    primary_table: str | None,
+) -> dict[str, pd.DataFrame]:
+    """统一单表/多表输入，并校验表名和主表是否存在。"""
+    if tables is None:
+        name = primary_table or "source_df"
+        return {name: source_df}
+
+    frames = dict(tables)
+    if not frames:
+        raise SandboxExecutionError("没有可执行的数据表")
+    if len(frames) > 50:
+        raise SandboxExecutionError("数据表数量过多，无法送入代码执行沙箱")
+
+    for name, frame in frames.items():
+        if not isinstance(name, str) or not name.strip():
+            raise SandboxExecutionError("数据表名不合法")
+        if len(name) > 80:
+            raise SandboxExecutionError("数据表名过长")
+        if not isinstance(frame, pd.DataFrame):
+            raise SandboxExecutionError(f"数据表 {name} 不是 DataFrame")
+
+    resolved_primary = primary_table or next(iter(frames))
+    if resolved_primary not in frames:
+        raise SandboxExecutionError("主表不在 tables 中")
+    return frames
+
+
 def _serialize_frame(frame: pd.DataFrame) -> dict[str, Any]:
     """使用 JSON 传输数据，避免 pickle 反序列化执行任意代码。"""
     columns = [str(column) for column in frame.columns]
@@ -285,7 +335,9 @@ def _validate_result(result: dict[str, Any], settings: Settings) -> dict[str, An
             raise SandboxExecutionError("沙箱结果行结构与列定义不一致")
 
     warnings = result.get("warnings")
-    if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
+    if not isinstance(warnings, list) or not all(
+        isinstance(item, str) for item in warnings
+    ):
         warnings = []
     return {
         "columns": [

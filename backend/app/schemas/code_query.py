@@ -50,6 +50,15 @@ class CodeExecutionInfo(BaseModel):
     retry_errors: list[str] = Field(default_factory=list)
 
 
+class QueryTableInfo(BaseModel):
+    """本次查询可用的数据表摘要，不暴露服务器路径。"""
+
+    name: str
+    role: str
+    row_count: int
+    file_name: str | None = None
+
+
 class CodeQueryMeta(BaseModel):
     """代码查询执行元信息。"""
 
@@ -57,6 +66,8 @@ class CodeQueryMeta(BaseModel):
     elapsed_ms: int
     source_row_count: int
     source_file: str | None = None
+    primary_table: str | None = None
+    tables: list[QueryTableInfo] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

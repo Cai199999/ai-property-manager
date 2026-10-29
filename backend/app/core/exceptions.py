@@ -88,3 +88,19 @@ class CodeSandboxUnavailableError(AppError):
     code = "CODE_SANDBOX_UNAVAILABLE"
     status_code = 503
     message = "代码执行沙箱不可用，已拒绝执行"
+
+
+class TableImportError(AppError):
+    """上传文件不合法或无法解析为数据表。"""
+
+    code = "TABLE_IMPORT_FAILED"
+    status_code = 422
+    message = "文件导入失败"
+
+
+class TableImportUnavailableError(AppError):
+    """多表目录未启用，拒绝上传。"""
+
+    code = "TABLE_IMPORT_UNAVAILABLE"
+    status_code = 503
+    message = "多表数据目录未启用，无法导入文件"

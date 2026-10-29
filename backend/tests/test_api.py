@@ -13,6 +13,8 @@ def _settings(tmp_path: Path, **overrides: object) -> Settings:
         "data_source": "rpa",
         "rpa_download_dir": tmp_path / "downloads",
         "rpa_simulate_delay_seconds": 0.0,
+        "table_directory_enabled": False,
+        "data_table_dir": tmp_path / "tables",
         "deepseek_api_key": SecretStr(""),
         "llm_fallback_enabled": True,
         "max_query_days": 366,

@@ -201,6 +201,52 @@ command -v bwrap
 
 如果看到 `CODE_SANDBOX_UNAVAILABLE`，说明沙箱条件不满足，接口会拒绝执行而不是降级。
 
+## 多表联查与文件导入
+
+### 1. 生成 Mock 多表
+
+```bash
+./scripts/generate_mock_tables.py
+```
+
+默认输出到 `backend/.runtime/rpa_downloads/tables/`：
+
+| 表 | 行数 | 主键 | 外键 |
+| --- | --- | --- | --- |
+| 工单表 | 150 | 单号 | 项目编号 → 项目表；接单人编号、维修人员编号 → 人员表 |
+| 项目表 | 8 | 项目编号 | — |
+| 人员表 | 24 | 人员编号 | 所属项目编号 → 项目表 |
+
+生成器先构造项目和人员主数据，再从主数据抽取工单外键；固定 seed，生成前断言主键唯一、外键 100% 覆盖、人员与工单属于同一项目。`manifest.json` 声明主键、外键、时间列和事实/维表角色。
+
+### 2. 动态目录与 Prompt
+
+`TableCatalog` 在每次 `/api/v1/assistant/query/code` 请求时扫描目录（按文件 mtime + size 缓存，上传后主动失效）：
+
+- manifest 中声明的表带主键、外键、时间列、描述；
+- 上传件没有 manifest 时自动推断列类型、主键候选，并把多表同名列标记为 `same_name_hint`，不会自动断言外键；
+- Prompt 注入 `tables`（`dict[str, DataFrame]`）、`source_df`（主表）和 `relationships`；
+- 主表按时间列过滤，维表保持全量；目录为空时自动回退原 RPA 单表链路；
+- 模型必须用 `pd.merge` 显式写连接键，执行失败继续走最多 2 次自我修复。
+
+沙箱协议同步升级为多表 JSON 传输：`{"frames": {"工单表": {...}, "项目表": {...}}, "primary_table": "工单表"}`，仍然不挂载项目目录、不联网、不执行 pickle。
+
+### 3. 上传接口
+
+```bash
+curl -s http://127.0.0.1:8000/api/v1/assistant/tables/upload \
+  -F 'file=@/path/to/园区项目表.xlsx;filename=园区项目表.xlsx' \
+  | python3 -m json.tool
+
+curl -s http://127.0.0.1:8000/api/v1/assistant/tables | python3 -m json.tool
+```
+
+- 只接受 `.xlsx`，默认上限 20 MB、5 万行、100 列，仅导入第一个非空工作表；
+- 校验 xlsx 压缩包条目数与解压总量，文件名只取 basename，落盘名用 UUID；
+- 上传成功后写入 `upload_index.json` 并刷新目录；前端 8081 通过 CORS 直传 8000。
+
+前端查询面板新增“导入文件”按钮和“当前数据表”清单。注意：现有自然语言查询仍调用 Java 网关的固定 Schema 接口，多表查询目前通过 Python `/api/v1/assistant/query/code` 验证，前端通用结果渲染留待下一步接入。
+
 ## 扩展数据源
 
 1. 在 `backend/app/adapters/` 新建类，实现 `DataFetcher.fetch()`。
@@ -252,6 +298,12 @@ PROPERTY_API_KEY=...
 | `PREVIEW_ROWS` | `20` | 响应中明细预览行数 |
 | `TIMEZONE` | `Asia/Shanghai` | 相对日期计算时区 |
 | `RPA_DOWNLOAD_DIR` | `.runtime/rpa_downloads` | 模拟导出目录 |
+| `TABLE_DIRECTORY_ENABLED` | `true` | 是否启用多表目录 |
+| `DATA_TABLE_DIR` | `.runtime/rpa_downloads/tables` | 多表扫描目录 |
+| `TABLE_MAX_FILES` | `8` | 单次扫描最大表数 |
+| `TABLE_UPLOAD_MAX_BYTES` | `20000000` | 上传文件上限 |
+| `CODE_SANDBOX_MODE` | `bwrap` | 代码执行隔离模式，`disabled` 时拒绝执行 |
+| `CORS_ORIGINS` | `http://127.0.0.1:8081,...` | 前端直传上传接口的跨域白名单 |
 | `FASTAPI_BASE_URL` | `http://127.0.0.1:8000` | 网关 -> Agent 地址 |
 
 ## 测试

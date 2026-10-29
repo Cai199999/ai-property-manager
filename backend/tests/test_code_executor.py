@@ -64,6 +64,46 @@ result_df = (
     assert result.columns[1]["dtype"] == "int64"
 
 
+def test_executor_merges_multiple_tables_in_sandbox() -> None:
+    orders = pd.DataFrame(
+        {
+            "单号": ["T-1", "T-2", "T-3"],
+            "项目编号": ["P1", "P1", "P2"],
+            "费用金额": [10.0, 20.0, 5.0],
+        }
+    )
+    projects = pd.DataFrame(
+        {
+            "项目编号": ["P1", "P2"],
+            "所属区域": ["朝阳区", "海淀区"],
+        }
+    )
+    result = CodeExecutor(_settings()).execute(
+        orders,
+        """
+merged = tables["工单表"].merge(
+    tables["项目表"],
+    on="项目编号",
+    how="left",
+    validate="many_to_one",
+)
+result_df = (
+    merged.groupby("所属区域", as_index=False)
+    .agg(工单量=("单号", "size"), 总费用=("费用金额", "sum"))
+    .sort_values("工单量", ascending=False)
+)
+""",
+        timeout=8,
+        tables={"工单表": orders, "项目表": projects},
+        primary_table="工单表",
+    )
+
+    assert result.row_count == 2
+    assert result.rows[0]["所属区域"] == "朝阳区"
+    assert result.rows[0]["工单量"] == 2
+    assert result.rows[0]["总费用"] == 30.0
+
+
 def test_executor_rejects_file_write_before_process_starts() -> None:
     with pytest.raises(UnsafeCodeError):
         CodeExecutor(_settings()).execute(

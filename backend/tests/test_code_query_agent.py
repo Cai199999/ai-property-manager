@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -21,6 +22,8 @@ from app.services.code_executor import (
     SandboxTimeoutError,
 )
 from app.services.code_query_agent import CodeQueryAgent
+from app.services.mock_tables import generate_mock_tables
+from app.services.table_catalog import TableCatalog
 from app.services.time_range import TimeExtraction
 
 
@@ -76,6 +79,7 @@ class _FakeExecutor:
 
     def __init__(self, outcomes: list[object]) -> None:
         self.outcomes = outcomes
+        self.frames: dict[str, pd.DataFrame] | None = None
 
     def execute(
         self,
@@ -83,7 +87,10 @@ class _FakeExecutor:
         code: str,
         *,
         timeout: float,
+        tables: dict[str, pd.DataFrame] | None = None,
+        primary_table: str | None = None,
     ) -> CodeExecutionResult:
+        self.frames = tables
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
@@ -103,6 +110,7 @@ def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "deepseek_api_key": SecretStr(""),
         "code_query_enabled": True,
+        "table_directory_enabled": False,
         "code_max_retries": 2,
         "code_total_timeout_seconds": 30.0,
         "code_llm_timeout_seconds": 5.0,
@@ -138,6 +146,59 @@ def test_agent_returns_generic_result_and_attempts() -> None:
     assert response.code.attempts == 1
     assert response.code.generated_code == "result_df = source_df.copy()"
     assert response.meta.source_file == "fake.xlsx"
+
+
+class _ExplodingFetcher:
+    source = "fake"
+
+    async def fetch(self, request: FetchRequest) -> FetchResult:
+        raise AssertionError("目录模式下不应调用 RPA 抓取")
+
+
+def test_agent_uses_directory_tables_before_rpa(tmp_path: Path) -> None:
+    generate_mock_tables(tmp_path)
+    settings = _settings(
+        table_directory_enabled=True,
+        data_table_dir=tmp_path,
+    )
+    generator = _FakeGenerator(
+        [
+            'merged = tables["工单表"].merge(\n'
+            '    tables["项目表"], on="项目编号", how="left"\n'
+            ")\n"
+            'result_df = merged[["所属区域"]].head(1)'
+        ]
+    )
+    executor = _FakeExecutor([_success()])
+    catalog = TableCatalog(settings)
+    agent = CodeQueryAgent(
+        settings,
+        _FakeExtractor(),  # type: ignore[arg-type]
+        _ExplodingFetcher(),  # type: ignore[arg-type]
+        generator,  # type: ignore[arg-type]
+        executor,  # type: ignore[arg-type]
+        table_catalog=catalog,
+    )
+
+    response = asyncio.run(
+        agent.handle(
+            message="按项目区域统计工单量",
+            request_id="code-test-directory",
+        )
+    )
+
+    assert response.data_source == "directory"
+    assert response.meta.primary_table == "工单表"
+    assert {table.name for table in response.meta.tables} == {
+        "工单表",
+        "项目表",
+        "人员表",
+    }
+    assert response.meta.source_row_count == 150
+    assert executor.frames is not None
+    assert set(executor.frames) == {"工单表", "项目表", "人员表"}
+    assert len(executor.frames["工单表"]) == 150
+    assert "catalog_profile" in generator.calls[0][1]["content"]
 
 
 def test_agent_repairs_static_validation_error() -> None:

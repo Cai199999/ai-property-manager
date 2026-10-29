@@ -6,3 +6,4 @@ httpx>=0.28,<1.0
 pydantic>=2.10,<3.0
 pydantic-settings>=2.7,<3.0
 anyio>=4.8,<5.0
+python-multipart>=0.0.20,<1.0

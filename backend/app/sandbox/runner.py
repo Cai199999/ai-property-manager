@@ -55,7 +55,9 @@ _SAFE_BUILTIN_NAMES = (
     "ZeroDivisionError",
 )
 _SAFE_BUILTINS = {
-    name: getattr(builtins, name) for name in _SAFE_BUILTIN_NAMES if hasattr(builtins, name)
+    name: getattr(builtins, name)
+    for name in _SAFE_BUILTIN_NAMES
+    if hasattr(builtins, name)
 }
 
 
@@ -81,21 +83,48 @@ def main() -> int:
 
 def _execute(payload: dict[str, Any]) -> dict[str, Any]:
     code = payload.get("code")
-    frame_payload = payload.get("frame")
     limits = payload.get("limits") or {}
     if not isinstance(code, str) or not code.strip():
         raise ValueError("生成的代码为空")
-    if not isinstance(frame_payload, dict):
-        raise ValueError("缺少 source_df 数据")
 
-    frame = _restore_frame(frame_payload)
+    frames_payload = payload.get("frames")
+    if frames_payload is None and isinstance(payload.get("frame"), dict):
+        # 兼容旧的单表协议。
+        frames_payload = {"source_df": payload["frame"]}
+    if not isinstance(frames_payload, dict) or not frames_payload:
+        raise ValueError("缺少数据表")
+
+    max_tables = int(limits.get("max_tables", 50))
+    max_frame_rows = int(limits.get("max_frame_rows", 50_000))
+    max_frame_columns = int(limits.get("max_frame_columns", 100))
+    if len(frames_payload) > max_tables:
+        raise ValueError(f"数据表数量超过上限 {max_tables}")
+
+    frames: dict[str, pd.DataFrame] = {}
+    for name, frame_payload in frames_payload.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("数据表名不合法")
+        if not isinstance(frame_payload, dict):
+            raise ValueError(f"数据表 {name} 结构不合法")
+        frame = _restore_frame(frame_payload)
+        if len(frame) > max_frame_rows:
+            raise ValueError(f"数据表 {name} 行数超过上限 {max_frame_rows}")
+        if len(frame.columns) > max_frame_columns:
+            raise ValueError(f"数据表 {name} 列数超过上限 {max_frame_columns}")
+        frames[name] = frame
+
+    primary_table = payload.get("primary_table")
+    if not isinstance(primary_table, str) or primary_table not in frames:
+        primary_table = next(iter(frames))
+
     _apply_resource_limits()
 
     namespace = {
         "__builtins__": _SAFE_BUILTINS,
         "pd": pd,
         "np": np,
-        "source_df": frame.copy(),
+        "tables": {name: frame.copy() for name, frame in frames.items()},
+        "source_df": frames[primary_table].copy(),
         "result_df": None,
     }
 
@@ -113,7 +142,8 @@ def _execute(payload: dict[str, Any]) -> dict[str, Any]:
     result_df = namespace.get("result_df")
     if not isinstance(result_df, pd.DataFrame):
         raise TypeError(
-            "result_df 必须是 pandas DataFrame，" f"当前类型是 {type(result_df).__name__}"
+            "result_df 必须是 pandas DataFrame，"
+            f"当前类型是 {type(result_df).__name__}"
         )
 
     max_rows = int(limits.get("max_rows", 5_000))

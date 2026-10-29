@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
@@ -27,6 +28,8 @@ from app.services.code_executor import CodeExecutor
 from app.services.code_generator import DeepSeekCodeGenerator
 from app.services.code_query_agent import CodeQueryAgent
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.table_catalog import TableCatalog
+from app.services.table_import import TableImportService
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,7 @@ def create_app(
     fetcher: DataFetcher | None = None,
     code_generator: DeepSeekCodeGenerator | None = None,
     code_executor: CodeExecutor | None = None,
+    table_catalog: TableCatalog | None = None,
 ) -> FastAPI:
     """应用工厂，便于测试注入替身而不污染全局依赖。"""
     resolved_settings = settings or Settings()
@@ -51,6 +55,15 @@ def create_app(
     resolved_extractor = extractor or DeepSeekTimeRangeExtractor(resolved_settings)
     resolved_code_generator = code_generator or DeepSeekCodeGenerator(resolved_settings)
     resolved_code_executor = code_executor or CodeExecutor(resolved_settings)
+    resolved_table_catalog = table_catalog
+    if resolved_table_catalog is None and resolved_settings.table_directory_enabled:
+        resolved_table_catalog = TableCatalog(resolved_settings)
+    table_import_service = (
+        TableImportService(resolved_settings, resolved_table_catalog)
+        if resolved_table_catalog is not None
+        else None
+    )
+
     agent = AssistantAgent(resolved_settings, resolved_extractor, resolved_fetcher)
     code_agent = CodeQueryAgent(
         resolved_settings,
@@ -58,6 +71,7 @@ def create_app(
         resolved_fetcher,
         resolved_code_generator,
         resolved_code_executor,
+        table_catalog=resolved_table_catalog,
     )
 
     @asynccontextmanager
@@ -86,11 +100,26 @@ def create_app(
     app.state.assistant_agent = agent
     app.state.code_query_agent = code_agent
     app.state.fetcher_registry = registry
+    app.state.table_catalog = resolved_table_catalog
+    app.state.table_import_service = table_import_service
+
+    # 前端静态页运行在 8081，导入文件直传 8000，需要单独放行。
+    if resolved_settings.cors_origin_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=resolved_settings.cors_origin_list,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-Id"],
+        )
 
     @app.middleware("http")
     async def attach_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
         candidate = request.headers.get("X-Request-Id", "").strip()
-        request_id = candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
+        request_id = (
+            candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
+        )
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-Id"] = request_id
@@ -119,6 +148,8 @@ def create_app(
             "llm_configured": bool(resolved_settings.deepseek_key),
             "code_query_enabled": resolved_settings.code_query_enabled,
             "code_sandbox_available": resolved_code_executor.available,
+            "table_directory_enabled": resolved_settings.table_directory_enabled,
+            "table_catalog_ready": resolved_table_catalog is not None,
         }
 
     return app
