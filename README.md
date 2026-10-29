@@ -175,6 +175,32 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
 }
 ```
 
+## 生成式 Pandas 查询
+
+新增端点 `POST /api/v1/assistant/query/code`，让 DeepSeek 根据自然语言直接生成 Pandas 代码，不再要求模型输出固定字段结构：
+
+```text
+自然语言 -> 时间解析 -> RPA/API 获取 source_df
+        -> 表结构摘要（列名、dtype、5 行样例）
+        -> DeepSeek 生成 result_df 代码
+        -> 静态安全校验 -> bwrap 隔离子进程执行
+        -> 通用结果表 {columns, rows, row_count}
+```
+
+- 只向模型发送列结构和最多 5 行脱敏样例，不发送完整明细、密钥或本机文件。
+- 生成代码必须在模块顶层给 `result_df` 赋值；禁止 import、网络、文件、系统命令和双下划线对象访问。
+- 代码只在 `bwrap` 子进程中执行，网络和项目目录均不可见；沙箱不可用时直接失败，不会退化为主进程 `exec()`。
+- 执行失败会把安全错误和异常信息追加到对话，最多重试 2 次。
+- 新端点返回通用结果表，不改变现有 `/api/v1/assistant/query` 的固定业务 Schema；Java 网关和前端暂未接入该端点。
+
+启动前确认本机存在 `bwrap`：
+
+```bash
+command -v bwrap
+```
+
+如果看到 `CODE_SANDBOX_UNAVAILABLE`，说明沙箱条件不满足，接口会拒绝执行而不是降级。
+
 ## 扩展数据源
 
 1. 在 `backend/app/adapters/` 新建类，实现 `DataFetcher.fetch()`。

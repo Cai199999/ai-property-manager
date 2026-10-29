@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.schemas.assistant import AssistantQueryRequest, AssistantQueryResponse
+from app.schemas.code_query import CodeQueryRequest, CodeQueryResponse
 
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
@@ -30,6 +31,22 @@ async def query_assistant(
     request: Request,
 ) -> AssistantQueryResponse:
     return await request.app.state.assistant_agent.handle(
+        message=payload.message,
+        request_id=get_request_id(request),
+        property_name=payload.property_name,
+    )
+
+
+@router.post(
+    "/query/code",
+    response_model=CodeQueryResponse,
+    summary="自然语言生成 Pandas 代码并返回通用结果表",
+)
+async def query_with_generated_code(
+    payload: CodeQueryRequest,
+    request: Request,
+) -> CodeQueryResponse:
+    return await request.app.state.code_query_agent.handle(
         message=payload.message,
         request_id=get_request_id(request),
         property_name=payload.property_name,

@@ -43,6 +43,21 @@ class Settings(BaseSettings):
     deepseek_timeout_seconds: float = Field(default=30.0, gt=0.0, le=120.0)
     llm_fallback_enabled: bool = True
 
+    # 生成式 Pandas 查询：模型只负责生成代码，真正执行必须经过沙箱。
+    code_query_enabled: bool = True
+    code_sandbox_mode: str = "bwrap"
+    code_max_retries: int = Field(default=2, ge=0, le=5)
+    code_llm_timeout_seconds: float = Field(default=20.0, gt=0.0, le=120.0)
+    code_exec_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
+    code_total_timeout_seconds: float = Field(default=50.0, gt=0.0, le=180.0)
+    code_max_code_chars: int = Field(default=20_000, ge=1_000, le=100_000)
+    code_max_result_rows: int = Field(default=5_000, ge=1, le=100_000)
+    code_max_result_columns: int = Field(default=50, ge=1, le=500)
+    code_max_cell_chars: int = Field(default=1_000, ge=10, le=20_000)
+    code_max_payload_bytes: int = Field(default=20_000_000, ge=1_000_000, le=100_000_000)
+    code_sample_rows: int = Field(default=5, ge=1, le=20)
+    code_expose_generated_code: bool = True
+
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, value: str) -> str:
@@ -57,6 +72,15 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_data_source(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("code_sandbox_mode")
+    @classmethod
+    def validate_code_sandbox_mode(cls, value: str) -> str:
+        """沙箱模式只允许明确支持的取值，避免误配置后退化成不安全执行。"""
+        normalized = value.strip().lower()
+        if normalized not in {"bwrap", "disabled"}:
+            raise ValueError("code_sandbox_mode 只支持 bwrap 或 disabled")
+        return normalized
 
     @property
     def deepseek_key(self) -> str:

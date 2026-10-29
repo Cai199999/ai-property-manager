@@ -23,6 +23,9 @@ from app.api.routes import router
 from app.config import Settings
 from app.core.logging import configure_logging
 from app.services.agent import AssistantAgent
+from app.services.code_executor import CodeExecutor
+from app.services.code_generator import DeepSeekCodeGenerator
+from app.services.code_query_agent import CodeQueryAgent
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,8 @@ def create_app(
     *,
     extractor: DeepSeekTimeRangeExtractor | None = None,
     fetcher: DataFetcher | None = None,
+    code_generator: DeepSeekCodeGenerator | None = None,
+    code_executor: CodeExecutor | None = None,
 ) -> FastAPI:
     """应用工厂，便于测试注入替身而不污染全局依赖。"""
     resolved_settings = settings or Settings()
@@ -44,7 +49,16 @@ def create_app(
         resolved_settings,
     )
     resolved_extractor = extractor or DeepSeekTimeRangeExtractor(resolved_settings)
+    resolved_code_generator = code_generator or DeepSeekCodeGenerator(resolved_settings)
+    resolved_code_executor = code_executor or CodeExecutor(resolved_settings)
     agent = AssistantAgent(resolved_settings, resolved_extractor, resolved_fetcher)
+    code_agent = CodeQueryAgent(
+        resolved_settings,
+        resolved_extractor,
+        resolved_fetcher,
+        resolved_code_generator,
+        resolved_code_executor,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -57,6 +71,9 @@ def create_app(
         )
         yield
         await resolved_extractor.aclose()
+        close_generator = getattr(resolved_code_generator, "aclose", None)
+        if close_generator is not None:
+            await close_generator()
         logger.info("应用已停止")
 
     app = FastAPI(
@@ -67,6 +84,7 @@ def create_app(
     )
     app.state.settings = resolved_settings
     app.state.assistant_agent = agent
+    app.state.code_query_agent = code_agent
     app.state.fetcher_registry = registry
 
     @app.middleware("http")
@@ -99,6 +117,8 @@ def create_app(
             "version": __version__,
             "data_source": resolved_fetcher.source,
             "llm_configured": bool(resolved_settings.deepseek_key),
+            "code_query_enabled": resolved_settings.code_query_enabled,
+            "code_sandbox_available": resolved_code_executor.available,
         }
 
     return app

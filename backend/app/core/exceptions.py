@@ -64,3 +64,27 @@ class DataContractError(AppError):
     code = "DATA_CONTRACT_INVALID"
     status_code = 502
     message = "上游数据格式不符合约定"
+
+
+class CodeGenerationError(AppError):
+    """模型多次尝试后仍无法生成可执行的数据分析代码。"""
+
+    code = "CODE_GENERATION_FAILED"
+    status_code = 422
+    message = "无法生成可执行的数据分析代码"
+
+
+class CodeExecutionTimeoutError(AppError):
+    """生成代码在沙箱中执行超时。"""
+
+    code = "CODE_EXECUTION_TIMEOUT"
+    status_code = 504
+    message = "生成代码执行超时"
+
+
+class CodeSandboxUnavailableError(AppError):
+    """运行环境缺少可用的隔离沙箱，拒绝执行生成代码。"""
+
+    code = "CODE_SANDBOX_UNAVAILABLE"
+    status_code = 503
+    message = "代码执行沙箱不可用，已拒绝执行"
