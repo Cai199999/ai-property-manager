@@ -29,8 +29,14 @@ logger = logging.getLogger(__name__)
 
 REPORT_DOWNLOAD_PATH = "/api/v1/assistant/download"
 REPORT_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+WORD_REPORT_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# 下载路由按扩展名选择 MIME，Excel 与 Word 共用同一个导出目录和下载前缀。
+REPORT_MEDIA_TYPES = {
+    ".xlsx": REPORT_MEDIA_TYPE,
+    ".docx": WORD_REPORT_MEDIA_TYPE,
+}
 
-_EXPORT_NAME_RE = re.compile(r"^report_[0-9a-f]{32}\.xlsx$")
+_EXPORT_NAME_RE = re.compile(r"^report_[0-9a-f]{32}\.(?:xlsx|docx)$")
 _DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 _HEADER_FILL = PatternFill("solid", fgColor="DDEBF7")
 
@@ -42,6 +48,46 @@ class ExportFile:
     filename: str
     path: Path
     size_bytes: int
+
+
+def media_type_for(filename: str) -> str:
+    """按扩展名返回下载 MIME；调用前应先通过文件名白名单校验。"""
+    return REPORT_MEDIA_TYPES.get(Path(filename).suffix.lower(), REPORT_MEDIA_TYPE)
+
+
+def cleanup_report_directory(
+    directory: Path,
+    *,
+    ttl_seconds: int,
+    max_files: int,
+) -> None:
+    """删除过期文件，并在数量超限时按修改时间淘汰最旧文件。"""
+    try:
+        files = sorted(
+            (
+                path
+                for path in directory.glob("report_*")
+                if path.suffix.lower() in REPORT_MEDIA_TYPES and path.is_file()
+            ),
+            key=lambda item: item.stat().st_mtime,
+        )
+    except OSError:
+        return
+
+    now = time.time()
+    alive: list[Path] = []
+    for path in files:
+        try:
+            if now - path.stat().st_mtime > ttl_seconds:
+                path.unlink(missing_ok=True)
+            else:
+                alive.append(path)
+        except OSError:
+            continue
+
+    excess = len(alive) - max_files
+    for path in alive[: max(excess, 0)]:
+        path.unlink(missing_ok=True)
 
 
 class ExcelReportExporter:
@@ -135,30 +181,12 @@ class ExcelReportExporter:
         return path
 
     def _cleanup_locked(self) -> None:
-        """删除过期文件，并在数量超限时按修改时间淘汰最旧文件。"""
-        try:
-            files = sorted(
-                self._directory.glob("report_*.xlsx"),
-                key=lambda item: item.stat().st_mtime,
-            )
-        except OSError:
-            return
-
-        now = time.time()
-        ttl = self._settings.report_export_ttl_seconds
-        alive: list[Path] = []
-        for path in files:
-            try:
-                if now - path.stat().st_mtime > ttl:
-                    path.unlink(missing_ok=True)
-                else:
-                    alive.append(path)
-            except OSError:
-                continue
-
-        excess = len(alive) - self._settings.report_export_max_files
-        for path in alive[: max(excess, 0)]:
-            path.unlink(missing_ok=True)
+        """Excel 与 Word 共用目录，清理时一并处理两种后缀。"""
+        cleanup_report_directory(
+            self._directory,
+            ttl_seconds=self._settings.report_export_ttl_seconds,
+            max_files=self._settings.report_export_max_files,
+        )
 
 
 def _excel_value(value: Any) -> Any:

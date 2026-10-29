@@ -21,6 +21,7 @@ from app.core.exceptions import (
 )
 from app.schemas.assistant import ParserInfo, TimeRange
 from app.schemas.code_query import (
+    ChartMeta,
     CodeExecutionInfo,
     CodeQueryMeta,
     CodeQueryResponse,
@@ -56,6 +57,12 @@ from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
 from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
 from app.services.time_range import TimeExtraction
+from app.services.word_exporter import (
+    DeepSeekReportSummarizer,
+    ReportSummary,
+    WordReportExporter,
+    build_fallback_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +94,8 @@ class CodeQueryAgent:
         executor: CodeExecutor,
         table_catalog: TableCatalog | None = None,
         report_exporter: ExcelReportExporter | None = None,
+        word_exporter: WordReportExporter | None = None,
+        report_summarizer: DeepSeekReportSummarizer | None = None,
     ) -> None:
         self._settings = settings
         self._extractor = extractor
@@ -99,6 +108,8 @@ class CodeQueryAgent:
             else None
         )
         self._report_exporter = report_exporter
+        self._word_exporter = word_exporter
+        self._report_summarizer = report_summarizer
 
     async def handle(
         self,
@@ -244,10 +255,32 @@ class CodeQueryAgent:
             if execution.row_count == 0:
                 warnings.append("生成代码返回了空结果")
 
-            chart_meta = infer_chart_meta(execution.columns, execution.rows)
+            chart_meta = infer_chart_meta(
+                execution.columns,
+                execution.rows,
+                question=message,
+            )
             download_url = await self._export_report(
                 request_id=request_id,
                 execution=execution,
+                warnings=warnings,
+            )
+            summary = await self._build_report_summary(
+                message=message,
+                execution=execution,
+                chart_meta=chart_meta,
+                extraction=extraction,
+                source=source,
+                warnings=warnings,
+            )
+            word_download_url = await self._export_word_report(
+                request_id=request_id,
+                question=message,
+                execution=execution,
+                chart_meta=chart_meta,
+                summary=summary,
+                extraction=extraction,
+                source=source,
                 warnings=warnings,
             )
 
@@ -280,6 +313,7 @@ class CodeQueryAgent:
                 ),
                 chart_meta=chart_meta,
                 download_url=download_url,
+                word_download_url=word_download_url,
                 code=CodeExecutionInfo(
                     attempts=attempts,
                     generated_code=(
@@ -351,6 +385,104 @@ class CodeQueryAgent:
             return None
 
         if exported is None:
+            return None
+        return f"{REPORT_DOWNLOAD_PATH}/{exported.filename}"
+
+    async def _build_report_summary(
+        self,
+        *,
+        message: str,
+        execution: CodeExecutionResult,
+        chart_meta: ChartMeta,
+        extraction: TimeExtraction,
+        source: _SourceData,
+        warnings: list[str],
+    ) -> ReportSummary | None:
+        """生成报告结论；模型失败时退回规则摘要，不阻断 Word 生成。"""
+        if not self._settings.word_report_enabled or execution.row_count == 0:
+            return None
+
+        fallback = ReportSummary(
+            text=build_fallback_summary(
+                columns=execution.columns,
+                rows=execution.rows,
+                chart_meta=chart_meta.model_dump(),
+            ),
+            engine="fallback",
+        )
+        if self._report_summarizer is None:
+            return fallback
+
+        try:
+            summary = await self._report_summarizer.summarize(
+                question=message,
+                columns=execution.columns,
+                rows=execution.rows,
+                chart_meta=chart_meta.model_dump(),
+                time_range=extraction.time_range.model_dump(),
+                table_names=[table.name for table in source.tables],
+            )
+        except Exception:  # noqa: BLE001 - 总结失败不能影响主查询
+            logger.exception("Word 报告总结异常")
+            summary = fallback
+
+        # 未配置模型时使用规则摘要属于正常降级，不产生“失败”告警。
+        if summary.engine == "fallback" and self._settings.deepseek_key:
+            warnings.append("AI 总结生成失败，Word 报告已使用系统自动摘要")
+        return summary
+
+    async def _export_word_report(
+        self,
+        *,
+        request_id: str,
+        question: str,
+        execution: CodeExecutionResult,
+        chart_meta: ChartMeta,
+        summary: ReportSummary | None,
+        extraction: TimeExtraction,
+        source: _SourceData,
+        warnings: list[str],
+    ) -> str | None:
+        """导出 Word 报告；任何失败都只降级为警告。"""
+        if (
+            self._word_exporter is None
+            or not self._word_exporter.enabled
+            or execution.row_count == 0
+            or summary is None
+        ):
+            return None
+
+        table_names = [table.name for table in source.tables]
+        if not table_names and source.primary_table:
+            table_names = [source.primary_table]
+
+        try:
+            exported = await anyio.to_thread.run_sync(
+                partial(
+                    self._word_exporter.export,
+                    question=question,
+                    columns=execution.columns,
+                    rows=execution.rows,
+                    chart_meta=chart_meta.model_dump(),
+                    summary=summary,
+                    request_id=request_id,
+                    time_range=extraction.time_range.model_dump(),
+                    data_source=source.data_source,
+                    table_names=tuple(table_names),
+                    warnings=tuple(warnings),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 导出失败不应中断查询
+            logger.warning(
+                "Word 报告导出失败 request_id=%s error=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            warnings.append("Word 报告生成失败，可先下载 Excel 结果")
+            return None
+
+        if exported is None:
+            warnings.append("Word 报告生成失败，可先下载 Excel 结果")
             return None
         return f"{REPORT_DOWNLOAD_PATH}/{exported.filename}"
 

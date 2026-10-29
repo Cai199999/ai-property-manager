@@ -440,6 +440,8 @@ class AssistantGatewayIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isEqualTo(DOWNLOAD_BYTES);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE))
+                .startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml");
         assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
                 .contains("attachment")
                 .contains("report_0123456789abcdef0123456789abcdef.xlsx");
@@ -447,6 +449,36 @@ class AssistantGatewayIntegrationTest {
                 .contains("private");
         assertThat(response.getHeaders().getFirst("X-Content-Type-Options"))
                 .isEqualTo("nosniff");
+    }
+
+    @Test
+    void streamsWordReportWithDocxMediaType() {
+        // 上游即使返回 Excel MIME，网关也按 .docx 后缀修正，避免浏览器把报告当表格打开。
+        ResponseEntity<byte[]> response = restTemplate.getForEntity(
+                "/api/v1/assistant/download/report_fedcba9876543210fedcba9876543210.docx",
+                byte[].class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isEqualTo(DOWNLOAD_BYTES);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE))
+                .isEqualTo(
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                );
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+                .contains("attachment")
+                .contains("report_fedcba9876543210fedcba9876543210.docx");
+    }
+
+    @Test
+    void rejectsUnsupportedDownloadExtension() {
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "/api/v1/assistant/download/report_0123456789abcdef0123456789abcdef.pdf",
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("DOWNLOAD_NAME_INVALID");
     }
 
     @Test

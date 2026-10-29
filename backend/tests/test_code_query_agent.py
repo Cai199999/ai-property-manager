@@ -1,4 +1,6 @@
 import asyncio
+import io
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -443,3 +445,81 @@ def test_code_query_exports_excel_and_download_endpoint(tmp_path: Path) -> None:
     )
     assert invalid.status_code == 400
     assert invalid.json()["error"]["code"] == "REPORT_NAME_INVALID"
+
+
+def test_code_query_exports_word_report_and_downloads_docx(tmp_path: Path) -> None:
+    """Word 报告与 Excel 同时产出，且都走同一个下载接口。"""
+    settings = _settings(
+        report_export_enabled=True,
+        word_report_enabled=True,
+        report_export_dir=tmp_path / "exports",
+    )
+    app = create_app(
+        settings,
+        extractor=_FakeExtractor(),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(),  # type: ignore[arg-type]
+        code_generator=_FakeGenerator(["result_df = source_df.copy()"]),  # type: ignore[arg-type]
+        code_executor=_FakeExecutor([_success()]),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/query/code",
+            json={"message": "按项目统计工单"},
+        )
+        body = response.json()
+        word_url = body["word_download_url"]
+        download = client.get(word_url)
+
+    assert response.status_code == 200
+    assert body["download_url"].endswith(".xlsx")
+    assert word_url.startswith("/api/v1/assistant/download/report_")
+    assert word_url.endswith(".docx")
+    # 未配置 DeepSeek Key 时属于正常降级，不应提示“AI 总结失败”
+    assert not any("AI 总结生成失败" in warning for warning in body["meta"]["warnings"])
+
+    assert download.status_code == 200
+    assert download.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert download.content[:2] == b"PK"
+
+    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+        assert "word/document.xml" in archive.namelist()
+
+
+class _ExplodingWordExporter:
+    """模拟 Word 生成异常，验证降级不影响主查询。"""
+
+    enabled = True
+
+    def export(self, **_: object) -> None:
+        raise RuntimeError("docx 生成失败")
+
+
+def test_word_export_failure_degrades_to_warning(tmp_path: Path) -> None:
+    settings = _settings(
+        report_export_enabled=True,
+        word_report_enabled=True,
+        report_export_dir=tmp_path / "exports",
+    )
+    app = create_app(
+        settings,
+        extractor=_FakeExtractor(),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(),  # type: ignore[arg-type]
+        code_generator=_FakeGenerator(["result_df = source_df.copy()"]),  # type: ignore[arg-type]
+        code_executor=_FakeExecutor([_success()]),  # type: ignore[arg-type]
+    )
+    app.state.code_query_agent._word_exporter = _ExplodingWordExporter()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/query/code",
+            json={"message": "按项目统计工单"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["word_download_url"] is None
+    assert body["download_url"].endswith(".xlsx")
+    assert "Word 报告生成失败，可先下载 Excel 结果" in body["meta"]["warnings"]

@@ -24,11 +24,12 @@ import org.springframework.web.client.RestClientException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Locale;
 import java.util.concurrent.Semaphore;
 import java.util.regex.Pattern;
 
 /**
- * Excel 下载代理。
+ * 查询结果文件下载代理（Excel / Word）。
  *
  * 全程流式复制，不把文件读成 byte[]；并发数由 Semaphore 限制，避免大量
  * 下载同时占用堆内存和上游连接。
@@ -40,10 +41,13 @@ public class AgentDownloadService {
     private static final int BUFFER_SIZE = 64 * 1024;
     private static final int MAX_ERROR_BYTES = 8 * 1024;
     private static final Pattern SAFE_FILENAME = Pattern.compile(
-            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.xlsx$"
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(?:xlsx|docx)$"
     );
     private static final MediaType XLSX_MEDIA_TYPE = MediaType.parseMediaType(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    private static final MediaType DOCX_MEDIA_TYPE = MediaType.parseMediaType(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     );
 
     private final RestClient restClient;
@@ -72,7 +76,11 @@ public class AgentDownloadService {
             restClient.get()
                     .uri(properties.downloadPath() + "/{filename}", filename)
                     .header("X-Request-Id", requestId)
-                    .accept(MediaType.APPLICATION_OCTET_STREAM, XLSX_MEDIA_TYPE)
+                    .accept(
+                            MediaType.APPLICATION_OCTET_STREAM,
+                            XLSX_MEDIA_TYPE,
+                            DOCX_MEDIA_TYPE
+                    )
                     .exchange((clientRequest, clientResponse) -> {
                         copyResponse(clientResponse, filename, requestId, response);
                         return null;
@@ -117,7 +125,8 @@ public class AgentDownloadService {
         }
 
         response.setStatus(HttpStatus.OK.value());
-        response.setContentType(XLSX_MEDIA_TYPE.toString());
+        // 扩展名已在入口处通过白名单校验，这里只按后缀选择 MIME。
+        response.setContentType(mediaTypeFor(filename).toString());
         // 文件名已由白名单限制为纯 ASCII，不需要 RFC 2047 编码；
         // 带 charset 会生成 =?UTF-8?Q?...?= 的 encoded-word，浏览器兼容性更差。
         response.setHeader(
@@ -154,6 +163,12 @@ public class AgentDownloadService {
             }
             throw new UpstreamAgentException(502, "下载流中断", requestId);
         }
+    }
+
+    private MediaType mediaTypeFor(String filename) {
+        return filename.toLowerCase(Locale.ROOT).endsWith(".docx")
+                ? DOCX_MEDIA_TYPE
+                : XLSX_MEDIA_TYPE;
     }
 
     private void validateFilename(String filename) {

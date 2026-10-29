@@ -26,7 +26,7 @@ from app.schemas.tables import (
     TablePreviewResponse,
     TableUploadResponse,
 )
-from app.services.report_export import REPORT_MEDIA_TYPE
+from app.services.report_export import media_type_for
 from app.services.table_catalog import TableDataset, TableSnapshot
 from app.services.table_preview import build_table_preview
 
@@ -75,7 +75,7 @@ async def query_with_generated_code(
 
 @router.get(
     "/download/{filename}",
-    summary="下载查询结果 Excel",
+    summary="下载查询结果文件（Excel / Word）",
     response_class=FileResponse,
 )
 async def download_report(filename: str, request: Request) -> FileResponse:
@@ -86,7 +86,7 @@ async def download_report(filename: str, request: Request) -> FileResponse:
     path = await anyio.to_thread.run_sync(partial(exporter.resolve, filename))
     return FileResponse(
         path,
-        media_type=REPORT_MEDIA_TYPE,
+        media_type=media_type_for(filename),
         filename=filename,
         headers={
             "Cache-Control": "private, max-age=0, must-revalidate",

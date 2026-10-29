@@ -89,6 +89,13 @@ class Settings(BaseSettings):
         le=100_000_000,
     )
 
+    # Word 可视化报告：与 Excel 共用导出目录，额外调用一次模型生成结论。
+    word_report_enabled: bool = True
+    report_summary_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+    report_word_max_rows: int = Field(default=50, ge=1, le=200)
+    report_word_max_columns: int = Field(default=8, ge=1, le=20)
+    report_chart_max_categories: int = Field(default=12, ge=3, le=50)
+
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, value: str) -> str:

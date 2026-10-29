@@ -100,5 +100,6 @@ class CodeQueryResponse(BaseModel):
     result: CodeResult
     chart_meta: ChartMeta = Field(default_factory=ChartMeta)
     download_url: str | None = None
+    word_download_url: str | None = None
     code: CodeExecutionInfo
     meta: CodeQueryMeta

@@ -7,3 +7,5 @@ pydantic>=2.10,<3.0
 pydantic-settings>=2.7,<3.0
 anyio>=4.8,<5.0
 python-multipart>=0.0.20,<1.0
+python-docx>=1.2,<2.0
+matplotlib>=3.10,<4.0

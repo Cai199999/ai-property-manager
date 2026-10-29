@@ -29,6 +29,7 @@ from app.services.code_generator import DeepSeekCodeGenerator
 from app.services.code_query_agent import CodeQueryAgent
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
 from app.services.report_export import ExcelReportExporter
+from app.services.word_exporter import DeepSeekReportSummarizer, WordReportExporter
 from app.services.table_catalog import TableCatalog
 from app.services.table_import import TableImportService
 
@@ -65,6 +66,8 @@ def create_app(
         else None
     )
     report_exporter = ExcelReportExporter(resolved_settings)
+    word_exporter = WordReportExporter(resolved_settings)
+    report_summarizer = DeepSeekReportSummarizer(resolved_settings)
 
     agent = AssistantAgent(resolved_settings, resolved_extractor, resolved_fetcher)
     code_agent = CodeQueryAgent(
@@ -75,6 +78,8 @@ def create_app(
         resolved_code_executor,
         table_catalog=resolved_table_catalog,
         report_exporter=report_exporter,
+        word_exporter=word_exporter,
+        report_summarizer=report_summarizer,
     )
 
     @asynccontextmanager
@@ -88,6 +93,7 @@ def create_app(
         )
         yield
         await resolved_extractor.aclose()
+        await report_summarizer.aclose()
         close_generator = getattr(resolved_code_generator, "aclose", None)
         if close_generator is not None:
             await close_generator()

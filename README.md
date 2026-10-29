@@ -103,7 +103,7 @@ cd /home/admin1/Workspace/ai-property-manager
 - **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`；页面首次加载不预置任何表，导入后“当前数据表”只展示本次会话导入的文件；
 - **Excel 预览**：点击“当前数据表”中的表标签，分页查看该文件的实际单元格内容。表较多时列表横向滚动，不撑破页面。
 
-响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，链接指向 Java 网关的下载接口；前端不会直接访问 8000。
+响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，包含 `word_download_url` 时额外显示“下载 Word 报告”按钮；两者链接都指向 Java 网关的下载接口，前端不会直接访问 8000。
 
 ### 5. 调用
 
@@ -228,12 +228,14 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query/code \
     "y": ["工单量"],
     "series": [{"name": "工单量", "key": "工单量", "unit": "单"}]
   },
-  "download_url": "/api/v1/assistant/download/report_<32位hex>.xlsx"
+  "download_url": "/api/v1/assistant/download/report_<32位hex>.xlsx",
+  "word_download_url": "/api/v1/assistant/download/report_<32位hex>.docx"
 }
 ```
 
 - `chart_meta` 由 Python 根据结果列类型和取值确定，不额外调用大模型；无法判断时回退为 `table`。
 - `download_url` 是相对路径，前端只允许拼接 Java 网关地址；网关收到 `/download/{filename}` 后校验文件名，再向 Agent 取文件流。
+- `word_download_url` 与 `download_url` 同级且同源；Word 关闭、结果为空或生成失败时为 `null`。
 - Java 侧所有动态接口统一返回 `JsonNode`，不定义业务 DTO。Python 新增字段会原样出现在响应里，无需改 Java。
 - 大结果只返回前端预览所需行数；完整结果通过 Excel 下载获取。
 
@@ -242,12 +244,36 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query/code \
 网关下载接口 `GET /api/v1/assistant/download/{filename}` 不会把文件读成 `byte[]`：
 
 1. 使用独立 `RestClient` 和 120 秒下载读超时，禁止跟随重定向；
-2. 文件名必须匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.xlsx$`，拒绝路径穿越；
+2. 文件名必须匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(xlsx|docx)$`，拒绝路径穿越和其他后缀；
+   Content-Type 按后缀修正（`.xlsx` / `.docx`），不信任上游返回的 MIME；
 3. 用 64 KB 缓冲区把上游 `InputStream` 直接复制到 `HttpServletResponse.getOutputStream()`，堆内存占用与文件大小无关；
 4. 超过 `download-max-bytes` 立即中断；`Semaphore` 限制并发下载数，超限返回 429；
 5. 透传 `Content-Length`、`Content-Disposition`、`nosniff` 和私有缓存策略，浏览器能显示进度且不会缓存敏感报表。
 
 Python 导出侧使用 openpyxl `write_only` 模式、随机 token 文件名、TTL 清理和最大文件数限制；单元格以 `= + - @` 开头时加单引号，防止 Excel 公式注入。
+
+### Word 可视化报告
+
+`/query/code` 在生成 Excel 之后，会用同一次查询结果再产出一份 `.docx`（`app/services/word_exporter.py`）。依赖 `python-docx` 与 `matplotlib`（Agg 后端，无需图形界面）：
+
+```bash
+cd backend && .venv/bin/pip install -r requirements.txt
+```
+
+报告结构：
+
+1. 标题与元信息（提问原文、时间范围、数据来源表、请求 ID、生成时间、告警）；
+2. **AI 结论**：独立第二次调用 DeepSeek（不占用主查询的重试预算），只发送列结构、最多 20 行 × 30 列截断样例和 `chart_meta`，要求输出 150~250 字纯文本结论；超时 10 秒；
+3. 数据明细表：最多 50 行 × 8 列，超出部分提示“完整数据请下载 Excel”；
+4. 静态图表：按 `chart_meta` 用 matplotlib 渲染柱状图/折线图/饼图，Top 12 类目，PNG 写入临时文件后内嵌，导出结束即删除。
+
+降级策略（任何一步失败都不影响主查询返回 200）：
+
+- 未配置 `DEEPSEEK_API_KEY` 或总结调用失败：使用规则生成的摘要，并在报告里标注“系统自动摘要”；只有 Key 已配置却调用失败时才在 `meta.warnings` 中追加 `AI 总结生成失败…`；
+- Word 生成异常：`word_download_url` 为 `null`，`meta.warnings` 追加 `Word 报告生成失败，可先下载 Excel 结果`；
+- 结果为空、`WORD_REPORT_ENABLED=false`：不生成文件，`word_download_url` 为 `null`。
+
+图表渲染受全局锁保护（matplotlib 的 rcParams 与字体缓存不是线程安全的），字体优先使用 Noto Sans CJK SC，未登记时会扫描系统字体目录手动 `addfont()`，仍找不到则记录告警并用 DejaVu Sans 兜底。
 
 启动前确认本机存在 `bwrap`：
 
@@ -402,6 +428,11 @@ PROPERTY_API_KEY=...
 | `REPORT_EXPORT_TTL_SECONDS` | `3600` | 导出文件有效期 |
 | `REPORT_EXPORT_MAX_FILES` | `100` | 导出目录最大文件数 |
 | `REPORT_EXPORT_MAX_BYTES` | `20000000` | 单个导出文件上限 |
+| `WORD_REPORT_ENABLED` | `true` | 是否生成 Word 可视化报告 |
+| `REPORT_SUMMARY_TIMEOUT_SECONDS` | `10` | AI 结论单次调用超时 |
+| `REPORT_WORD_MAX_ROWS` | `50` | Word 数据表最大行数 |
+| `REPORT_WORD_MAX_COLUMNS` | `8` | Word 数据表最大列数 |
+| `REPORT_CHART_MAX_CATEGORIES` | `12` | Word 图表最多展示类目数 |
 | `CORS_ORIGINS` | `http://127.0.0.1:8081,...` | 浏览器访问网关的跨域白名单 |
 | `FASTAPI_BASE_URL` | `http://127.0.0.1:8000` | 网关 -> Agent 地址 |
 | `gateway.agent.download-max-concurrent` | `16` | 网关并发下载上限（`application.yml`） |

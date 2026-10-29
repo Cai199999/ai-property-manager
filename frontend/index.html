@@ -736,6 +736,13 @@
       display: none;
     }
 
+    .dynamic-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
     .dynamic-download {
       display: inline-flex;
       align-items: center;
@@ -1102,8 +1109,12 @@
             <h2 id="dynamicTitle">多表查询结果</h2>
             <p class="card-subtitle" id="dynamicSubtitle">等待查询。</p>
           </div>
-          <a class="query-button query-button--secondary dynamic-download"
-             id="downloadButton" href="#" download hidden>下载 Excel</a>
+          <div class="dynamic-actions">
+            <a class="query-button query-button--secondary dynamic-download"
+               id="downloadButton" href="#" download hidden>下载 Excel</a>
+            <a class="query-button query-button--secondary dynamic-download"
+               id="wordDownloadButton" href="#" download hidden>下载 Word 报告</a>
+          </div>
         </div>
         <div class="dynamic-chart" id="dynamicChart" role="img"
              aria-label="智能分析图表" hidden></div>
@@ -1176,6 +1187,7 @@
       const dynamicTableBody = document.getElementById("dynamicTableBody");
       const dynamicFootnote = document.getElementById("dynamicFootnote");
       const downloadButton = document.getElementById("downloadButton");
+      const wordDownloadButton = document.getElementById("wordDownloadButton");
       // 所有浏览器请求只发往 Java 网关，Python 8000 仅对 Java 可见。
       const gatewayOrigin = "http://127.0.0.1:8080";
       const apiBase = `${gatewayOrigin}/api/v1/assistant`;
@@ -1417,7 +1429,8 @@
         dynamicChart.setOption(option, true);
       };
 
-      const safeDownloadUrl = (value) => {
+      // 只接受网关同源的报告下载地址，并按扩展名白名单校验。
+      const safeDownloadUrl = (value, extension) => {
         if (typeof value !== "string" || !value.trim()) {
           return null;
         }
@@ -1426,13 +1439,30 @@
           if (url.origin !== gatewayOrigin) {
             return null;
           }
-          if (!/^\/api\/v1\/assistant\/download\/[A-Za-z0-9._-]+\.xlsx$/.test(url.pathname)) {
+          const pattern = new RegExp(
+            `^/api/v1/assistant/download/[A-Za-z0-9._-]+\\.${extension}$`
+          );
+          if (!pattern.test(url.pathname)) {
             return null;
           }
           return url;
         } catch {
           return null;
         }
+      };
+
+      const bindDownloadButton = (button, rawUrl, extension, fallbackName) => {
+        const url = safeDownloadUrl(rawUrl, extension);
+        if (!url) {
+          button.hidden = true;
+          button.removeAttribute("href");
+          return;
+        }
+        button.href = url.href;
+        button.download = decodeURIComponent(
+          url.pathname.split("/").pop() || fallbackName
+        );
+        button.hidden = false;
       };
 
       const renderDynamicPayload = (payload) => {
@@ -1479,17 +1509,13 @@
           }
         }
 
-        const downloadUrl = safeDownloadUrl(payload.download_url);
-        if (downloadUrl) {
-          downloadButton.href = downloadUrl.href;
-          downloadButton.download = decodeURIComponent(
-            downloadUrl.pathname.split("/").pop() || "result.xlsx"
-          );
-          downloadButton.hidden = false;
-        } else {
-          downloadButton.hidden = true;
-          downloadButton.removeAttribute("href");
-        }
+        bindDownloadButton(downloadButton, payload.download_url, "xlsx", "result.xlsx");
+        bindDownloadButton(
+          wordDownloadButton,
+          payload.word_download_url,
+          "docx",
+          "report.docx"
+        );
       };
 
       const showEmptyState = (message) => {

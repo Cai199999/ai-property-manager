@@ -55,6 +55,45 @@ def test_infer_chart_meta_uses_pie_for_small_category_count() -> None:
     assert meta.title == "工单量按所属区域"
 
 
+def test_infer_chart_meta_honours_explicit_chart_request() -> None:
+    """用户点名“柱状图/折线图/饼图”时，优先于按类目数的启发式。"""
+    columns = [
+        {"name": "所属区域", "dtype": "object"},
+        {"name": "工单量", "dtype": "int64"},
+    ]
+    rows = [
+        {"所属区域": "A区", "工单量": 420},
+        {"所属区域": "B区", "工单量": 360},
+        {"所属区域": "C区", "工单量": 139},
+    ]
+
+    assert infer_chart_meta(columns, rows, question="按所属区域统计，用柱状图展示").type == "bar"
+    assert infer_chart_meta(columns, rows, question="按所属区域统计").type == "pie"
+    assert (
+        infer_chart_meta(
+            columns,
+            rows,
+            question="先看饼图还是折线图？请用折线图",
+        ).type
+        == "line"
+    )
+
+
+def test_infer_chart_meta_ignores_pie_request_for_multiple_series() -> None:
+    """饼图无法表达多列数值，退回柱状图而不是画一张错误图表。"""
+    columns = [
+        {"name": "所属区域", "dtype": "object"},
+        {"name": "工单量", "dtype": "int64"},
+        {"name": "总金额", "dtype": "float64"},
+    ]
+    rows = [{"所属区域": "A区", "工单量": 420, "总金额": 1000.0}]
+
+    meta = infer_chart_meta(columns, rows, question="用饼图展示")
+
+    assert meta.type == "bar"
+    assert meta.y == ["工单量", "总金额"]
+
+
 def test_infer_chart_meta_falls_back_to_table_without_numeric_column() -> None:
     meta = infer_chart_meta(
         [{"name": "项目名称", "dtype": "object"}],
