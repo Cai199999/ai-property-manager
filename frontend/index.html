@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI 物管助手工单月报：报修类型分布与核心经营指标">
+  <meta name="theme-color" content="#f9f9f7">
+  <title>物业工单月报 · AI 物管助手</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f9f9f7;
+      --surface: #fcfcfb;
+      --surface-subtle: #f2f1ed;
+      --text-primary: #0b0b0b;
+      --text-secondary: #52514e;
+      --text-muted: #898781;
+      --hairline: rgba(11, 11, 11, 0.10);
+      --grid: #e1e0d9;
+      --accent: #2a78d6;
+      --accent-wash: rgba(42, 120, 214, 0.10);
+      --series-1: #2a78d6;
+      --series-2: #eb6834;
+      --series-3: #1baf7a;
+      --series-4: #eda100;
+      --series-5: #e87ba4;
+      --shadow: 0 18px 45px rgba(11, 11, 11, 0.05);
+      --radius: 20px;
+      --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:where(:not([data-theme="light"])) {
+        color-scheme: dark;
+        --page: #0d0d0d;
+        --surface: #1a1a19;
+        --surface-subtle: #232321;
+        --text-primary: #f0efec;
+        --text-secondary: #c3c2b7;
+        --text-muted: #898781;
+        --hairline: rgba(255, 255, 255, 0.10);
+        --grid: #2c2c2a;
+        --accent: #3987e5;
+        --accent-wash: rgba(57, 135, 229, 0.14);
+        --series-1: #3987e5;
+        --series-2: #d95926;
+        --series-3: #199e70;
+        --series-4: #c98500;
+        --series-5: #d55181;
+        --shadow: 0 20px 55px rgba(0, 0, 0, 0.24);
+      }
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-subtle: #232321;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --hairline: rgba(255, 255, 255, 0.10);
+      --grid: #2c2c2a;
+      --accent: #3987e5;
+      --accent-wash: rgba(57, 135, 229, 0.14);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --shadow: 0 20px 55px rgba(0, 0, 0, 0.24);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--page);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--page);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 36px 0 40px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 32px;
+      padding: 8px 2px 30px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 22px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+    }
+
+    .brand-live {
+      width: 6px;
+      height: 6px;
+      margin-left: 2px;
+      border-radius: 50%;
+      background: var(--series-3);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--series-3) 14%, transparent);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 54px);
+      font-weight: 650;
+      letter-spacing: -0.045em;
+      line-height: 1.05;
+    }
+
+    .subtitle {
+      margin: 14px 0 0;
+      color: var(--text-secondary);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .subtitle strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 42px;
+    }
+
+    .tool-button {
+      min-height: 36px;
+      padding: 0 13px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+    }
+
+    .tool-button:hover {
+      border-color: var(--text-muted);
+      color: var(--text-primary);
+    }
+
+    .tool-button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent-wash);
+      color: var(--accent);
+    }
+
+    .tool-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card,
+    .card {
+      border: 1px solid var(--hairline);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .stat-card {
+      min-height: 144px;
+      padding: 20px 21px;
+      border-radius: 16px;
+    }
+
+    .stat-label {
+      margin: 0 0 20px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+
+    .stat-value {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: clamp(27px, 3vw, 36px);
+      font-weight: 600;
+      letter-spacing: -0.035em;
+      line-height: 1;
+    }
+
+    .stat-unit {
+      margin-left: 3px;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .stat-note {
+      margin: 13px 0 0;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .card {
+      border-radius: var(--radius);
+    }
+
+    .chart-card {
+      padding: 25px 26px 20px;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .kicker {
+      margin: 0 0 7px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .card-subtitle {
+      margin: 8px 0 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .source-badge {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      gap: 7px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .source-badge::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+    }
+
+    .chart-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(225px, 280px);
+      align-items: center;
+      gap: 22px;
+      padding-top: 10px;
+    }
+
+    .chart {
+      width: 100%;
+      height: 380px;
+      min-width: 0;
+    }
+
+    .legend {
+      display: grid;
+      gap: 2px;
+      padding: 8px 0;
+    }
+
+    .legend-item {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 50px;
+      padding: 6px 4px;
+      border-bottom: 1px solid var(--grid);
+    }
+
+    .legend-item:last-child {
+      border-bottom: 0;
+    }
+
+    .legend-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      background: var(--legend-color);
+    }
+
+    .legend-name {
+      overflow: hidden;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 550;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .legend-count {
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .legend-share {
+      min-width: 44px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .chart-footnote {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 5px;
+      padding-top: 17px;
+      border-top: 1px solid var(--grid);
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .chart-footnote strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    .table-card {
+      margin-top: 16px;
+      padding: 0 26px;
+      overflow: hidden;
+    }
+
+    .table-card[hidden] {
+      display: none;
+    }
+
+    .table-scroll {
+      overflow-x: auto;
+      padding: 4px 0 22px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    caption {
+      padding: 20px 0 13px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+      text-align: left;
+    }
+
+    th,
+    td {
+      padding: 12px 8px;
+      border-bottom: 1px solid var(--grid);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    th:first-child,
+    td:first-child {
+      padding-left: 0;
+      text-align: left;
+    }
+
+    th:last-child,
+    td:last-child {
+      padding-right: 0;
+    }
+
+    th {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+
+    td {
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    td:first-child {
+      color: var(--text-primary);
+      font-weight: 550;
+    }
+
+    .table-color {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 8px;
+      border-radius: 2px;
+      background: var(--legend-color);
+      vertical-align: 1px;
+    }
+
+    .empty-state {
+      padding: 28px;
+      border: 1px dashed var(--hairline);
+      border-radius: 16px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.7;
+      text-align: center;
+    }
+
+    .page-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 22px 3px 0;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    .page-footer code {
+      color: var(--text-secondary);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 900px) {
+      .page {
+        width: min(100% - 32px, 760px);
+        padding-top: 24px;
+      }
+
+      .topbar {
+        display: block;
+        padding-bottom: 24px;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+        padding-top: 22px;
+      }
+
+      .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .chart-layout {
+        grid-template-columns: 1fr;
+        gap: 2px;
+      }
+
+      .chart {
+        height: 340px;
+      }
+
+      .legend {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 20px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .page {
+        width: calc(100% - 24px);
+        padding-top: 18px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .stat-card {
+        min-height: 126px;
+        padding: 17px;
+      }
+
+      .stat-label {
+        margin-bottom: 16px;
+      }
+
+      .chart-card {
+        padding: 20px 17px 16px;
+      }
+
+      .chart-head {
+        gap: 10px;
+      }
+
+      .chart {
+        height: 300px;
+      }
+
+      .source-badge {
+        display: none;
+      }
+
+      .legend {
+        grid-template-columns: 1fr;
+      }
+
+      .table-card {
+        padding: 0 17px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    @media print {
+      .page {
+        width: 100%;
+        padding: 0;
+      }
+
+      .toolbar {
+        display: none;
+      }
+
+      .stat-card,
+      .card {
+        box-shadow: none;
+      }
+
+      .table-card[hidden] {
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">物</span>
+          <span>AI 物管助手</span>
+          <span class="brand-live" aria-hidden="true"></span>
+          <span>工单分析</span>
+        </div>
+        <h1>物业工单月报</h1>
+        <p class="subtitle" id="pageSubtitle">正在读取数据快照…</p>
+      </div>
+
+      <div class="toolbar" role="group" aria-label="页面显示选项">
+        <button class="tool-button" id="textureButton" type="button" aria-pressed="false">
+          纹理辅助
+        </button>
+        <button class="tool-button" id="tableButton" type="button" aria-expanded="false"
+                aria-controls="tableCard">
+          数据表
+        </button>
+        <button class="tool-button" id="themeButton" type="button">
+          深色模式
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="stats" aria-label="关键指标">
+        <article class="stat-card">
+          <p class="stat-label">工单总量</p>
+          <p class="stat-value"><span id="statTotal">—</span><span class="stat-unit">单</span></p>
+          <p class="stat-note" id="statTotalNote">查询期内全部工单</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">费用合计</p>
+          <p class="stat-value" id="statAmount">—</p>
+          <p class="stat-note">已受理工单累计金额</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">完成率</p>
+          <p class="stat-value" id="statCompletion">—</p>
+          <p class="stat-note" id="statCompletionNote">已完成 / 全部工单</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">平均满意度</p>
+          <p class="stat-value"><span id="statSatisfaction">—</span><span class="stat-unit">/ 5</span></p>
+          <p class="stat-note">基于已回访工单</p>
+        </article>
+      </section>
+
+      <section class="card chart-card" aria-labelledby="chartTitle">
+        <div class="card-head">
+          <div>
+            <p class="kicker">报修类型</p>
+            <h2 id="chartTitle">工单量分布</h2>
+            <p class="card-subtitle">按工单量占总量的比例，所选时间段内共 <span id="chartTotal">—</span> 单。</p>
+          </div>
+          <span class="source-badge" id="sourceBadge">RPA 数据源</span>
+        </div>
+
+        <div class="chart-layout">
+          <div class="chart" id="repairChart" role="img" aria-label="报修类型工单量饼图"></div>
+          <div class="legend" id="repairLegend" aria-label="报修类型图例"></div>
+        </div>
+
+        <div class="chart-footnote">
+          <span id="chartInsight">—</span>
+          <span>悬停图表可查看数量与费用</span>
+        </div>
+      </section>
+
+      <section class="card table-card" id="tableCard" hidden aria-labelledby="tableTitle">
+        <div class="table-scroll">
+          <table>
+            <caption id="tableTitle">报修类型明细</caption>
+            <thead>
+              <tr>
+                <th scope="col">报修类型</th>
+                <th scope="col">工单量</th>
+                <th scope="col">占比</th>
+                <th scope="col">费用合计</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="empty-state" id="errorState" hidden>
+        数据未加载。请确认 <code>data/assistant-response.js</code> 存在，并通过本地静态服务器打开页面。
+      </div>
+
+      <noscript>
+        <div class="empty-state">此页面需要启用 JavaScript 才能绘制图表。</div>
+      </noscript>
+    </main>
+
+    <footer class="page-footer">
+      <span id="snapshotMeta">—</span>
+      <span>数据快照 · AI 物管助手</span>
+    </footer>
+  </div>
+
+  <script src="vendor/echarts.min.js"></script>
+  <script src="data/assistant-response.js"></script>
+  <script>
+    (() => {
+      "use strict";
+
+      const data = window.ASSISTANT_RESPONSE;
+      const root = document.documentElement;
+      const themeButton = document.getElementById("themeButton");
+      const textureButton = document.getElementById("textureButton");
+      const tableButton = document.getElementById("tableButton");
+      const tableCard = document.getElementById("tableCard");
+      const tableBody = document.getElementById("tableBody");
+      const legendRoot = document.getElementById("repairLegend");
+      const chartElement = document.getElementById("repairChart");
+      const errorState = document.getElementById("errorState");
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const colorMedia = window.matchMedia("(prefers-color-scheme: dark)");
+      const contrastMedia = window.matchMedia("(prefers-contrast: more)");
+      const themeStorageKey = "assistant-theme";
+      let chart = null;
+      let textureEnabled = contrastMedia.matches;
+
+      const numberFormatter = new Intl.NumberFormat("zh-CN");
+      const currencyFormatter = new Intl.NumberFormat("zh-CN", {
+        style: "currency",
+        currency: "CNY",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+
+      const escapeHtml = (value) => String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+
+      const cssValue = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+      const seriesColors = () => [
+        cssValue("--series-1"),
+        cssValue("--series-2"),
+        cssValue("--series-3"),
+        cssValue("--series-4"),
+        cssValue("--series-5")
+      ];
+
+      const formatDate = (value) => {
+        const [year, month, day] = value.split("-");
+        return `${year}.${month}.${day}`;
+      };
+
+      const isDark = () => root.dataset.theme === "dark";
+
+      const applyTheme = (theme, persist = true) => {
+        root.dataset.theme = theme;
+        themeButton.textContent = theme === "dark" ? "浅色模式" : "深色模式";
+        document.querySelector('meta[name="theme-color"]')
+          .setAttribute("content", theme === "dark" ? "#0d0d0d" : "#f9f9f7");
+        if (persist) {
+          localStorage.setItem(themeStorageKey, theme);
+        }
+        if (chart) {
+          renderChart();
+        }
+      };
+
+      const decalFor = (index) => {
+        if (!textureEnabled) {
+          return undefined;
+        }
+        return {
+          symbol: "rect",
+          symbolSize: 1,
+          dashArrayX: [1, 0],
+          dashArrayY: [3, 5],
+          rotation: (index % 2 === 0 ? 1 : -1) * Math.PI / 4,
+          color: isDark() ? "rgba(240, 239, 236, 0.48)" : "rgba(11, 11, 11, 0.34)"
+        };
+      };
+
+      const tooltipFormatter = (params) => {
+        const item = itemByName.get(params.name);
+        if (!item) {
+          return "";
+        }
+        const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
+        return `
+          <div style="min-width:160px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
+              <span style="width:8px;height:8px;border-radius:2px;background:${params.color}"></span>
+              <strong style="font-size:13px">${escapeHtml(item.name)}</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
+              <span>工单量</span><span>${numberFormatter.format(item.count)} 单</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
+              <span>占比</span><span>${share}%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:24px;color:${cssValue("--text-secondary")};font-size:12px;line-height:1.8">
+              <span>费用合计</span><span>${escapeHtml(currencyFormatter.format(item.amount))}</span>
+            </div>
+          </div>
+        `;
+      };
+
+      let totalRecords = 0;
+      let itemByName = new Map();
+
+      const renderChart = () => {
+        if (!chart) {
+          return;
+        }
+        const colors = seriesColors();
+        const textPrimary = cssValue("--text-primary");
+        const textMuted = cssValue("--text-muted");
+        const surface = cssValue("--surface");
+        const hairline = cssValue("--hairline");
+        const fontFamily = cssValue("--font-sans").replace(/\s+/g, " ");
+
+        chart.setOption({
+          animation: !reduceMotion,
+          animationDuration: 600,
+          animationEasing: "cubicOut",
+          textStyle: { fontFamily },
+          tooltip: {
+            trigger: "item",
+            confine: true,
+            backgroundColor: surface,
+            borderColor: hairline,
+            borderWidth: 1,
+            padding: 12,
+            textStyle: { color: textPrimary, fontFamily, fontSize: 12 },
+            extraCssText: "border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.14);",
+            formatter: tooltipFormatter
+          },
+          series: [{
+            name: "报修类型",
+            type: "pie",
+            radius: ["55%", "78%"],
+            center: ["50%", "50%"],
+            minAngle: 2,
+            padAngle: 1.5,
+            itemStyle: {
+              borderColor: surface,
+              borderWidth: 2,
+              borderRadius: 4
+            },
+            label: { show: false },
+            labelLine: { show: false },
+            emphasis: {
+              scale: true,
+              scaleSize: 7,
+              itemStyle: { shadowBlur: 18, shadowColor: "rgba(0,0,0,0.16)" }
+            },
+            data: repairTypes.map((item, index) => ({
+              name: item.name,
+              value: item.count,
+              itemStyle: {
+                color: colors[index],
+                decal: decalFor(index)
+              }
+            }))
+          }],
+          graphic: [
+            {
+              type: "text",
+              left: "center",
+              top: "39%",
+              style: {
+                text: numberFormatter.format(totalRecords),
+                fill: textPrimary,
+                fontFamily,
+                fontSize: 44,
+                fontWeight: 600,
+                textAlign: "center"
+              }
+            },
+            {
+              type: "text",
+              left: "center",
+              top: "56%",
+              style: {
+                text: "工单总量",
+                fill: textMuted,
+                fontFamily,
+                fontSize: 12,
+                fontWeight: 500,
+                textAlign: "center"
+              }
+            }
+          ]
+        }, true);
+      };
+
+      const renderLegend = () => {
+        legendRoot.innerHTML = "";
+        repairTypes.forEach((item, index) => {
+          const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
+          const row = document.createElement("div");
+          row.className = "legend-item";
+          row.style.setProperty("--legend-color", `var(--series-${index + 1})`);
+          row.innerHTML = `
+            <span class="legend-dot" aria-hidden="true"></span>
+            <span class="legend-name">${escapeHtml(item.name)}</span>
+            <span class="legend-count">${numberFormatter.format(item.count)} 单</span>
+            <span class="legend-share">${share}%</span>
+          `;
+          legendRoot.appendChild(row);
+        });
+      };
+
+      const renderTable = () => {
+        tableBody.innerHTML = repairTypes.map((item, index) => {
+          const share = totalRecords > 0 ? (item.count / totalRecords * 100).toFixed(1) : "0.0";
+          return `
+            <tr>
+              <td><span class="table-color" style="--legend-color:var(--series-${index + 1})" aria-hidden="true"></span>${escapeHtml(item.name)}</td>
+              <td>${numberFormatter.format(item.count)} 单</td>
+              <td>${share}%</td>
+              <td>${escapeHtml(currencyFormatter.format(item.amount))}</td>
+            </tr>
+          `;
+        }).join("");
+      };
+
+      let repairTypes = [];
+
+      const hydrate = () => {
+        if (!data || !data.summary || !Array.isArray(data.summary.by_repair_type)) {
+          errorState.hidden = false;
+          return false;
+        }
+
+        const summary = data.summary;
+        repairTypes = summary.by_repair_type;
+        totalRecords = summary.total_records;
+        itemByName = new Map(repairTypes.map((item) => [item.name, item]));
+
+        const projects = (summary.by_project || []).map((item) => item.name).join("、") || "全部项目";
+        const start = formatDate(data.time_range.start_date);
+        const end = formatDate(data.time_range.end_date);
+
+        document.getElementById("pageSubtitle").innerHTML =
+          `<strong>${escapeHtml(projects)}</strong> · ${start} — ${end} · ${numberFormatter.format(totalRecords)} 单`;
+        document.getElementById("chartTotal").textContent = numberFormatter.format(totalRecords);
+        document.getElementById("statTotal").textContent = numberFormatter.format(totalRecords);
+        document.getElementById("statAmount").textContent = currencyFormatter.format(summary.total_amount);
+        document.getElementById("statCompletion").textContent = `${(summary.completion_rate * 100).toFixed(1)}%`;
+        document.getElementById("statCompletionNote").textContent =
+          `${numberFormatter.format(summary.completed_count)} / ${numberFormatter.format(totalRecords)} 已完成`;
+        document.getElementById("statSatisfaction").textContent =
+          summary.average_satisfaction == null ? "—" : summary.average_satisfaction.toFixed(2);
+        document.getElementById("statTotalNote").textContent =
+          `${Math.round((new Date(end.replaceAll(".", "-")) - new Date(start.replaceAll(".", "-"))) / 86400000) + 1} 天查询区间`;
+        document.getElementById("sourceBadge").textContent =
+          `${(data.data_source || "rpa").toUpperCase()} 数据源`;
+
+        const top = repairTypes[0];
+        if (top) {
+          const share = totalRecords > 0 ? (top.count / totalRecords * 100).toFixed(1) : "0.0";
+          const topTwoShare = totalRecords > 0
+            ? ((top.count + (repairTypes[1]?.count || 0)) / totalRecords * 100).toFixed(1)
+            : "0.0";
+          document.getElementById("chartInsight").innerHTML =
+            `<strong>${escapeHtml(top.name)}</strong> 最多，占 ${share}%；前两类合计占 ${topTwoShare}%。`;
+        }
+
+        const snapshot = data.meta && data.meta.fetched_at
+          ? new Date(data.meta.fetched_at).toLocaleString("zh-CN", { hour12: false })
+          : "—";
+        document.getElementById("snapshotMeta").innerHTML =
+          `快照 ${escapeHtml(snapshot)} · 解析 ${escapeHtml(data.parser?.engine || "unknown")} · 请求 <code>${escapeHtml(data.request_id || "—")}</code>`;
+
+        renderLegend();
+        renderTable();
+        return true;
+      };
+
+      const initChart = () => {
+        if (!window.echarts) {
+          errorState.hidden = false;
+          errorState.textContent = "ECharts 未加载，请检查 frontend/vendor/echarts.min.js。";
+          return;
+        }
+        chart = window.echarts.init(chartElement, null, { renderer: "canvas" });
+        renderChart();
+
+        if ("ResizeObserver" in window) {
+          new ResizeObserver(() => chart.resize()).observe(chartElement);
+        } else {
+          window.addEventListener("resize", () => chart.resize());
+        }
+      };
+
+      const initialiseTheme = () => {
+        const stored = localStorage.getItem(themeStorageKey);
+        const initial = stored === "light" || stored === "dark"
+          ? stored
+          : (colorMedia.matches ? "dark" : "light");
+        applyTheme(initial, false);
+      };
+
+      themeButton.addEventListener("click", () => {
+        applyTheme(isDark() ? "light" : "dark");
+      });
+
+      textureButton.addEventListener("click", () => {
+        textureEnabled = !textureEnabled;
+        textureButton.setAttribute("aria-pressed", String(textureEnabled));
+        renderChart();
+      });
+
+      tableButton.addEventListener("click", () => {
+        const willOpen = tableCard.hidden;
+        tableCard.hidden = !willOpen;
+        tableButton.setAttribute("aria-expanded", String(willOpen));
+        tableButton.textContent = willOpen ? "收起数据表" : "数据表";
+      });
+
+      colorMedia.addEventListener("change", (event) => {
+        if (!localStorage.getItem(themeStorageKey)) {
+          applyTheme(event.matches ? "dark" : "light", false);
+        }
+      });
+
+      contrastMedia.addEventListener("change", (event) => {
+        textureEnabled = event.matches;
+        textureButton.setAttribute("aria-pressed", String(textureEnabled));
+        renderChart();
+      });
+
+      initialiseTheme();
+      textureButton.setAttribute("aria-pressed", String(textureEnabled));
+
+      if (hydrate()) {
+        initChart();
+        chartElement.setAttribute(
+          "aria-label",
+          "报修类型饼图：" + repairTypes
+            .map((item) => `${item.name}${item.count}单`)
+            .join("，")
+        );
+      }
+    })();
+  </script>
+</body>
+</html>

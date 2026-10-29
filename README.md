@@ -43,6 +43,10 @@ ai-property-manager/
 │   └── .env.example
 ├── gateway/                 # Spring Boot 3.5 / Java 21
 │   └── src/
+├── frontend/                # 原生 HTML/CSS/JS + 本地 ECharts
+│   ├── data/                # 由 API 响应生成的数据快照
+│   ├── vendor/              # 本地 ECharts（离线可用）
+│   └── index.html           # 工单月报看板
 ├── scripts/
 └── .venv/                   # 使用 --system-site-packages 创建
 ```
@@ -81,7 +85,18 @@ cd /home/admin1/Workspace/ai-property-manager
 
 网关健康检查：http://127.0.0.1:8080/actuator/health
 
-### 4. 调用
+### 4. 打开可视化看板
+
+```bash
+cd /home/admin1/Workspace/ai-property-manager
+./scripts/start-frontend.sh
+```
+
+访问 http://127.0.0.1:8081/
+
+看板读取 `frontend/data/assistant-response.js` 中的 API 响应快照，用 ECharts 绘制报修类型饼图，并提供核心指标、图例数值、可展开数据表、明暗主题与纹理辅助。更新数据时，将新的 `/api/v1/assistant/query` 响应写入该文件即可。
+
+### 5. 调用
 
 ```bash
 curl -s http://127.0.0.1:8080/api/v1/assistant/query \
