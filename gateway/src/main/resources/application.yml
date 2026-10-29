@@ -1,0 +1,34 @@
+server:
+  port: ${GATEWAY_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: ai-property-gateway
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+gateway:
+  agent:
+    base-url: ${FASTAPI_BASE_URL:http://127.0.0.1:8000}
+    query-path: ${FASTAPI_QUERY_PATH:/api/v1/assistant/query}
+    connect-timeout: 3s
+    read-timeout: 60s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:-}] %logger{36} - %msg%n"
+  level:
+    com.example.propertyassistant: INFO

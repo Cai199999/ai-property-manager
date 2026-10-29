@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.black_cache/
+*.egg-info/
+
+# 运行期文件
+.env
+.runtime/
+*.db
+*.sqlite3
+*.log
+
+# Java / Maven
+target/
+*.class
+*.jar
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Excel 导出物（测试临时文件）
+*.xlsx
+!docs/**/*.xlsx
