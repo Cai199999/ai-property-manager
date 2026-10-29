@@ -113,6 +113,22 @@ class AssistantGatewayIntegrationTest {
             }
             """;
 
+    private static final String PREVIEW_RESPONSE_JSON = """
+            {
+              "name": "工单表_A区",
+              "file_name": "工单表_A区.xlsx",
+              "role": "fact",
+              "schema_group": "work_orders",
+              "total_rows": 420,
+              "offset": 0,
+              "limit": 2,
+              "has_more": true,
+              "columns": [{"name": "单号", "dtype": "object", "null_count": 0}],
+              "rows": [{"单号": "A-001"}],
+              "derived_columns": ["费用金额"]
+            }
+            """;
+
     private static final byte[] DOWNLOAD_BYTES = new byte[256 * 1024];
 
     static {
@@ -126,6 +142,8 @@ class AssistantGatewayIntegrationTest {
     private static final AtomicReference<String> FORWARDED_UPLOAD_CONTENT_TYPE =
             new AtomicReference<>();
     private static final AtomicReference<String> FORWARDED_UPLOAD_BODY = new AtomicReference<>();
+    private static final AtomicReference<String> FORWARDED_PREVIEW_QUERY =
+            new AtomicReference<>();
     private static final HttpServer UPSTREAM;
     private static final ExecutorService UPSTREAM_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
@@ -179,6 +197,10 @@ class AssistantGatewayIntegrationTest {
                         StandardCharsets.ISO_8859_1
                 ));
                 sendJson(exchange, 200, UPLOAD_RESPONSE_JSON);
+            });
+            UPSTREAM.createContext("/api/v1/assistant/tables/preview", exchange -> {
+                FORWARDED_PREVIEW_QUERY.set(exchange.getRequestURI().getRawQuery());
+                sendJson(exchange, 200, PREVIEW_RESPONSE_JSON);
             });
             UPSTREAM.createContext("/api/v1/assistant/tables", exchange ->
                     sendJson(exchange, 200, TABLES_RESPONSE_JSON));
@@ -389,6 +411,24 @@ class AssistantGatewayIntegrationTest {
                 .contains("工单表_A区.xlsx")
                 .contains("工单表_B区.xlsx");
         assertThat(upload.getBody()).contains("园区项目表");
+    }
+
+    @Test
+    void proxiesTablePreviewWithPagingParameters() {
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "/api/v1/assistant/tables/preview?name={name}&offset=0&limit=2",
+                String.class,
+                "工单表_A区"
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .contains("工单表_A区")
+                .contains("derived_columns");
+        assertThat(FORWARDED_PREVIEW_QUERY.get())
+                .contains("name=")
+                .contains("offset=0")
+                .contains("limit=2");
     }
 
     @Test

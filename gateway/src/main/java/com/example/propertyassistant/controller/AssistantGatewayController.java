@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -63,6 +64,22 @@ public class AssistantGatewayController {
     @GetMapping("/tables")
     public ResponseEntity<JsonNode> tables(HttpServletRequest servletRequest) {
         JsonNode response = agentGatewayService.listTables(requestId(servletRequest));
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/tables/preview")
+    public ResponseEntity<JsonNode> previewTable(
+            @RequestParam("name") String name,
+            @RequestParam(name = "offset", defaultValue = "0") int offset,
+            @RequestParam(name = "limit", defaultValue = "50") int limit,
+            HttpServletRequest servletRequest
+    ) {
+        JsonNode response = agentGatewayService.previewTable(
+                name,
+                offset,
+                limit,
+                requestId(servletRequest)
+        );
         return ResponseEntity.ok(response);
     }
 

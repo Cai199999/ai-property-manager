@@ -21,6 +21,7 @@ public record GatewayProperties(
         @NotBlank String queryPath,
         @NotBlank String codeQueryPath,
         @NotBlank String tablesPath,
+        @NotBlank String previewPath,
         @NotBlank String uploadPath,
         @NotBlank String downloadPath,
         @NotNull Duration connectTimeout,

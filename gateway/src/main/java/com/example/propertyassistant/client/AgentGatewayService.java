@@ -87,6 +87,32 @@ public class AgentGatewayService {
         }
     }
 
+    public JsonNode previewTable(String name, int offset, int limit, String requestId) {
+        try {
+            return restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path(properties.previewPath())
+                            .queryParam("name", name)
+                            .queryParam("offset", offset)
+                            .queryParam("limit", limit)
+                            .build())
+                    .header("X-Request-Id", requestId)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .exchange((clientRequest, clientResponse) ->
+                            readJsonResponse(clientResponse, requestId));
+        } catch (UpstreamAgentException exception) {
+            log.warn("Agent 预览返回异常 requestId={} upstreamStatus={}",
+                    requestId, exception.getUpstreamStatus());
+            throw exception;
+        } catch (ResourceAccessException exception) {
+            log.error("无法连接 Python Agent requestId={}", requestId, exception);
+            throw new UpstreamAgentException(503, "Python Agent 服务不可达", requestId);
+        } catch (RestClientException exception) {
+            log.error("Agent 预览失败 requestId={}", requestId, exception);
+            throw new UpstreamAgentException(502, "Python Agent 调用失败", requestId);
+        }
+    }
+
     public JsonNode uploadTables(List<MultipartFile> files, String requestId) {
         if (files == null || files.isEmpty()) {
             throw new InvalidUploadException("请选择至少一个 .xlsx 文件");

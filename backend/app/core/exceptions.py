@@ -106,6 +106,22 @@ class TableImportUnavailableError(AppError):
     message = "多表数据目录未启用，无法导入文件"
 
 
+class TableNotFoundError(AppError):
+    """请求预览的数据表不在当前目录中。"""
+
+    code = "TABLE_NOT_FOUND"
+    status_code = 404
+    message = "数据表不存在，请刷新当前数据表清单"
+
+
+class TablePreviewUnavailableError(AppError):
+    """多表目录未启用，无法提供预览。"""
+
+    code = "TABLE_PREVIEW_UNAVAILABLE"
+    status_code = 503
+    message = "多表数据目录未启用，无法预览 Excel 内容"
+
+
 class ReportNameInvalidError(AppError):
     """下载文件名不符合导出文件名规则。"""
 

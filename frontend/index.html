@@ -319,7 +319,20 @@
       border-radius: 999px;
       background: var(--page);
       color: var(--text-secondary);
+      cursor: pointer;
+      font: inherit;
       font-size: 12px;
+      text-align: left;
+    }
+
+    .table-chip:hover {
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+
+    .table-chip:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
 
     .table-chip strong {
@@ -745,6 +758,64 @@
       display: none;
     }
 
+    .preview-card[hidden] {
+      display: none;
+    }
+
+    .preview-table-scroll {
+      max-height: 460px;
+      margin-top: 12px;
+      overflow: auto;
+      border: 1px solid var(--hairline);
+      border-radius: 12px;
+    }
+
+    .preview-table-scroll table {
+      width: max-content;
+      min-width: 100%;
+    }
+
+    .preview-table {
+      font-size: 12px;
+    }
+
+    .preview-table th,
+    .preview-table td {
+      padding: 8px 10px;
+      text-align: left;
+    }
+
+    .preview-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--surface-subtle);
+    }
+
+    .preview-table tbody tr:hover {
+      background: var(--surface-subtle);
+    }
+
+    .preview-pager {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .preview-pager[hidden] {
+      display: none;
+    }
+
+    .preview-pager-actions {
+      display: flex;
+      gap: 8px;
+    }
+
     .empty-state {
       padding: 28px;
       border: 1px dashed var(--hairline);
@@ -989,6 +1060,36 @@
         </div>
       </section>
 
+      <section class="card dynamic-card preview-card" id="tablePreviewCard" hidden
+               aria-labelledby="tablePreviewTitle">
+        <div class="card-head">
+          <div>
+            <p class="kicker">Excel 预览</p>
+            <h2 id="tablePreviewTitle">数据表内容</h2>
+            <p class="card-subtitle" id="tablePreviewSubtitle">点击上方数据表查看内容。</p>
+          </div>
+          <button class="query-button query-button--secondary" id="tablePreviewClose"
+                  type="button">关闭</button>
+        </div>
+        <p class="query-status upload-status" id="tablePreviewStatus" role="status"
+           aria-live="polite" hidden></p>
+        <div class="preview-table-scroll" id="tablePreviewScroll" hidden>
+          <table class="preview-table">
+            <thead id="tablePreviewHead"></thead>
+            <tbody id="tablePreviewBody"></tbody>
+          </table>
+        </div>
+        <div class="preview-pager" id="tablePreviewPager" hidden>
+          <span id="tablePreviewRange">—</span>
+          <div class="preview-pager-actions">
+            <button class="query-button query-button--secondary" id="tablePreviewPrev"
+                    type="button">上一页</button>
+            <button class="query-button query-button--secondary" id="tablePreviewNext"
+                    type="button">下一页</button>
+          </div>
+        </div>
+      </section>
+
       <div class="empty-state" id="emptyState">请输入自然语言开始查询</div>
 
       <div id="resultsRoot" hidden>
@@ -1125,6 +1226,18 @@
       const uploadStatus = document.getElementById("uploadStatus");
       const tableCatalog = document.getElementById("tableCatalog");
       const tableCatalogList = document.getElementById("tableCatalogList");
+      const tablePreviewCard = document.getElementById("tablePreviewCard");
+      const tablePreviewTitle = document.getElementById("tablePreviewTitle");
+      const tablePreviewSubtitle = document.getElementById("tablePreviewSubtitle");
+      const tablePreviewStatus = document.getElementById("tablePreviewStatus");
+      const tablePreviewScroll = document.getElementById("tablePreviewScroll");
+      const tablePreviewHead = document.getElementById("tablePreviewHead");
+      const tablePreviewBody = document.getElementById("tablePreviewBody");
+      const tablePreviewPager = document.getElementById("tablePreviewPager");
+      const tablePreviewRange = document.getElementById("tablePreviewRange");
+      const tablePreviewPrev = document.getElementById("tablePreviewPrev");
+      const tablePreviewNext = document.getElementById("tablePreviewNext");
+      const tablePreviewClose = document.getElementById("tablePreviewClose");
       const dynamicCard = document.getElementById("dynamicCard");
       const dynamicSubtitle = document.getElementById("dynamicSubtitle");
       const dynamicChartElement = document.getElementById("dynamicChart");
@@ -1139,7 +1252,9 @@
       const queryEndpoint = `${apiBase}/query`;
       const codeQueryEndpoint = `${apiBase}/query/code`;
       const tableEndpoint = `${apiBase}/tables`;
+      const tablePreviewEndpoint = `${apiBase}/tables/preview`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
+      const previewPageSize = 50;
       const maxUploadBytes = 20 * 1024 * 1024;
       // 与网关 gateway.agent.upload-max-files、后端 TABLE_UPLOAD_MAX_FILES 保持一致。
       const maxUploadFiles = 10;
@@ -1168,6 +1283,13 @@
       let projectManuallySelected = false;
       let isQuerying = false;
       let isUploading = false;
+      let previewAbortController = null;
+      const previewState = {
+        name: "",
+        offset: 0,
+        totalRows: 0,
+        hasMore: false
+      };
 
       const numberFormatter = new Intl.NumberFormat("zh-CN");
       const currencyFormatter = new Intl.NumberFormat("zh-CN", {
@@ -1865,11 +1987,15 @@
             : (table.role === "dimension" ? "维表" : "数据表");
           const primaryClass = table.name === primaryTable ? " is-primary" : "";
           return `
-            <li class="table-chip${primaryClass}">
-              <strong>${escapeHtml(table.name)}</strong>
-              <span>${numberFormatter.format(table.row_count)} 行</span>
-              <span>${numberFormatter.format(table.column_count)} 列</span>
-              <span class="table-chip-role">${roleLabel}</span>
+            <li>
+              <button class="table-chip${primaryClass}" type="button"
+                      data-table-name="${escapeHtml(table.name)}"
+                      title="预览 ${escapeHtml(table.name)} 的 Excel 内容">
+                <strong>${escapeHtml(table.name)}</strong>
+                <span>${numberFormatter.format(table.row_count)} 行</span>
+                <span>${numberFormatter.format(table.column_count)} 列</span>
+                <span class="table-chip-role">${roleLabel}</span>
+              </button>
             </li>
           `;
         }).join("");
@@ -1891,6 +2017,187 @@
           // 网关或数据目录未就绪时静默隐藏，不影响现有看板查询。
         }
       };
+
+      const showPreviewStatus = (message, kind) => {
+        tablePreviewStatus.textContent = message;
+        tablePreviewStatus.classList.toggle("is-error", kind === "error");
+        tablePreviewStatus.classList.toggle("is-loading", kind === "loading");
+        tablePreviewStatus.hidden = !message;
+      };
+
+      const closeTablePreview = () => {
+        if (previewAbortController) {
+          previewAbortController.abort();
+          previewAbortController = null;
+        }
+        previewState.name = "";
+        previewState.offset = 0;
+        previewState.totalRows = 0;
+        previewState.hasMore = false;
+        tablePreviewCard.hidden = true;
+        tablePreviewHead.replaceChildren();
+        tablePreviewBody.replaceChildren();
+        tablePreviewScroll.hidden = true;
+        tablePreviewPager.hidden = true;
+        tablePreviewPrev.disabled = true;
+        tablePreviewNext.disabled = true;
+        showPreviewStatus("", null);
+      };
+
+      const renderTablePreview = (payload) => {
+        const columns = Array.isArray(payload.columns) ? payload.columns : [];
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        const totalRows = Number(payload.total_rows || 0);
+        const offset = Number(payload.offset || 0);
+        const derived = Array.isArray(payload.derived_columns)
+          ? payload.derived_columns
+          : [];
+
+        previewState.name = payload.name || previewState.name;
+        previewState.offset = offset;
+        previewState.totalRows = totalRows;
+        previewState.hasMore = Boolean(payload.has_more);
+
+        tablePreviewTitle.textContent = payload.name || previewState.name;
+        let subtitle = `${payload.file_name || ""} · 共 `
+          + `${numberFormatter.format(totalRows)} 行 × `
+          + `${numberFormatter.format(columns.length)} 列（Excel 原始列）`;
+        if (derived.length) {
+          subtitle += `；分析时另派生：${derived.join("、")}（不写入文件）`;
+        }
+        tablePreviewSubtitle.textContent = subtitle;
+
+        const headRow = document.createElement("tr");
+        columns.forEach((column) => {
+          const th = document.createElement("th");
+          th.scope = "col";
+          th.textContent = column.name;
+          headRow.appendChild(th);
+        });
+        tablePreviewHead.replaceChildren(headRow);
+
+        const fragment = document.createDocumentFragment();
+        rows.forEach((row) => {
+          const tr = document.createElement("tr");
+          columns.forEach((column) => {
+            const td = document.createElement("td");
+            td.textContent = formatDynamicCell(row[column.name]);
+            tr.appendChild(td);
+          });
+          fragment.appendChild(tr);
+        });
+        tablePreviewBody.replaceChildren(fragment);
+        tablePreviewScroll.hidden = false;
+
+        if (totalRows === 0) {
+          tablePreviewPager.hidden = true;
+          showPreviewStatus("该表没有数据。", "success");
+          return;
+        }
+        if (rows.length === 0) {
+          tablePreviewPager.hidden = true;
+          showPreviewStatus("当前页没有数据，请刷新数据表清单。", "error");
+          return;
+        }
+
+        tablePreviewPager.hidden = false;
+        tablePreviewRange.textContent = `第 `
+          + `${numberFormatter.format(offset + 1)}–`
+          + `${numberFormatter.format(offset + rows.length)} 行 / 共 `
+          + `${numberFormatter.format(totalRows)} 行`;
+        tablePreviewPrev.disabled = offset <= 0;
+        tablePreviewNext.disabled = !previewState.hasMore;
+        showPreviewStatus("", null);
+      };
+
+      const openTablePreview = async (name, offset = 0) => {
+        if (!name) {
+          return;
+        }
+        if (previewAbortController) {
+          previewAbortController.abort();
+        }
+        const controller = new AbortController();
+        previewAbortController = controller;
+
+        tablePreviewCard.hidden = false;
+        tablePreviewTitle.textContent = name;
+        tablePreviewSubtitle.textContent = "正在读取 Excel 内容…";
+        tablePreviewScroll.hidden = true;
+        tablePreviewPager.hidden = true;
+        tablePreviewPrev.disabled = true;
+        tablePreviewNext.disabled = true;
+        showPreviewStatus("正在加载…", "loading");
+
+        try {
+          const response = await fetch(
+            `${tablePreviewEndpoint}?name=${encodeURIComponent(name)}`
+              + `&offset=${offset}&limit=${previewPageSize}`,
+            {
+              headers: { Accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal
+            }
+          );
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch {
+            payload = null;
+          }
+          if (!response.ok) {
+            throw new Error(
+              payload?.error?.message || `预览失败（HTTP ${response.status}）`
+            );
+          }
+          renderTablePreview(payload);
+        } catch (error) {
+          if (error.name === "AbortError") {
+            return;
+          }
+          tablePreviewSubtitle.textContent = "读取失败";
+          showPreviewStatus(error.message || "预览失败，请稍后重试。", "error");
+        } finally {
+          if (previewAbortController === controller) {
+            previewAbortController = null;
+          }
+        }
+      };
+
+      tableCatalogList.addEventListener("click", (event) => {
+        const chip = event.target instanceof Element
+          ? event.target.closest(".table-chip")
+          : null;
+        if (!chip) {
+          return;
+        }
+        const name = chip.dataset.tableName;
+        if (name) {
+          void openTablePreview(name, 0);
+        }
+      });
+
+      tablePreviewPrev.addEventListener("click", () => {
+        if (!previewState.name || previewState.offset <= 0) {
+          return;
+        }
+        void openTablePreview(
+          previewState.name,
+          Math.max(0, previewState.offset - previewPageSize)
+        );
+      });
+
+      tablePreviewNext.addEventListener("click", () => {
+        if (!previewState.name || !previewState.hasMore) {
+          return;
+        }
+        void openTablePreview(
+          previewState.name,
+          previewState.offset + previewPageSize
+        );
+      });
+
+      tablePreviewClose.addEventListener("click", closeTablePreview);
 
       const handleUpload = async () => {
         if (isUploading) {
@@ -1950,6 +2257,7 @@
             );
           }
 
+          closeTablePreview();
           renderTableCatalog(payload.tables, payload.primary_table);
           // 新后端返回 imported_tables；兼容只返回单个 imported 的旧响应。
           const importedTables = Array.isArray(payload.imported_tables)

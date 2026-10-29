@@ -7,13 +7,15 @@ from functools import partial
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.exceptions import (
     ReportNotFoundError,
     TableImportError,
     TableImportUnavailableError,
+    TableNotFoundError,
+    TablePreviewUnavailableError,
 )
 from app.schemas.assistant import AssistantQueryRequest, AssistantQueryResponse
 from app.schemas.code_query import CodeQueryRequest, CodeQueryResponse
@@ -21,10 +23,12 @@ from app.schemas.tables import (
     TableCatalogResponse,
     TableColumnInfo,
     TableInfo,
+    TablePreviewResponse,
     TableUploadResponse,
 )
 from app.services.report_export import REPORT_MEDIA_TYPE
 from app.services.table_catalog import TableDataset, TableSnapshot
+from app.services.table_preview import build_table_preview
 
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
@@ -118,6 +122,30 @@ async def list_tables(request: Request) -> TableCatalogResponse:
     return _catalog_response(snapshot)
 
 
+@router.get(
+    "/tables/preview",
+    response_model=TablePreviewResponse,
+    summary="分页预览 Excel 原始内容",
+)
+async def preview_table(
+    request: Request,
+    name: str = Query(..., min_length=1, max_length=255),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> TablePreviewResponse:
+    catalog = getattr(request.app.state, "table_catalog", None)
+    if catalog is None or not request.app.state.settings.table_directory_enabled:
+        raise TablePreviewUnavailableError()
+
+    snapshot = await anyio.to_thread.run_sync(catalog.scan)
+    dataset = snapshot.table_map().get(name)
+    if dataset is None:
+        raise TableNotFoundError()
+
+    preview = build_table_preview(dataset, offset=offset, limit=limit)
+    return TablePreviewResponse(**preview)
+
+
 @router.post(
     "/tables/upload",
     response_model=TableUploadResponse,
@@ -156,9 +184,7 @@ async def upload_table(
         # 网关会把原始文件名放在独立字段中，避免 multipart 头部的编码差异；
         # 直接调用本接口（curl/Swagger）时仍回退到文件段自带的 filename。
         original_name = (
-            provided_names[index]
-            if index < len(provided_names)
-            else (upload.filename or "")
+            provided_names[index] if index < len(provided_names) else (upload.filename or "")
         ).strip()
         display_name = original_name or f"第 {index + 1} 个文件"
         if len(original_name) > 255:

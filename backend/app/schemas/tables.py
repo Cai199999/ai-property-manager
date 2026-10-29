@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -42,3 +44,23 @@ class TableUploadResponse(TableCatalogResponse):
 
     imported: TableInfo | None = None
     imported_tables: list[TableInfo] = Field(default_factory=list)
+
+
+class TablePreviewResponse(BaseModel):
+    """Excel 原始内容的分页预览。
+
+    ``columns`` 只包含磁盘文件中的真实列；``derived_columns`` 是分析阶段
+    在内存中补充的字段（例如费用金额），不会伪装成 Excel 内容。
+    """
+
+    name: str
+    file_name: str
+    role: str
+    schema_group: str = ""
+    total_rows: int
+    offset: int
+    limit: int
+    has_more: bool
+    columns: list[TableColumnInfo] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    derived_columns: list[str] = Field(default_factory=list)

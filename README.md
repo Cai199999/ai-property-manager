@@ -101,7 +101,8 @@ cd /home/admin1/Workspace/ai-property-manager
 
 - **查询**：调用固定 Schema 的 `/api/v1/assistant/query`，渲染月报指标和既有看板；
 - **智能分析**：调用 `/api/v1/assistant/query/code`，按响应中的 `result.columns/rows` 动态渲染表格，并按 `chart_meta` 渲染柱状图、折线图或饼图；
-- **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`，随后可基于新表做多文件汇总分析。
+- **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`，随后可基于新表做多文件汇总分析；
+- **Excel 预览**：点击“当前数据表”中的表标签，分页查看该文件的实际单元格内容。
 
 响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，链接指向 Java 网关的下载接口；前端不会直接访问 8000。
 
@@ -324,6 +325,21 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/tables | python3 -m json.tool
 - 网关限制单文件、文件数量和单请求总大小，Python 侧再次校验压缩包结构，上传件始终按不可信数据处理。
 
 前端“导入文件”按钮支持多选，同样只请求 8080；上传成功后刷新“当前数据表”清单并展示本次导入的全部文件。
+
+### 4. Excel 内容预览
+
+点击“当前数据表”中的任意表标签，页面会分页展示该 Excel 的实际内容：
+
+```bash
+curl -s 'http://127.0.0.1:8080/api/v1/assistant/tables/preview?name=%E5%B7%A5%E5%8D%95%E8%A1%A8_A%E5%8C%BA&offset=0&limit=50' \
+  | python3 -m json.tool
+```
+
+- `limit` 默认 50，范围 1–200；`offset` 从 0 开始，避免一次返回 5 万行；
+- 只展示磁盘文件中的真实列，分析阶段派生的 `费用金额` 单独放在 `derived_columns`，不会冒充 Excel 内容；
+- 单元格统一转换为字符串/数字/null，时间字段格式化为 `YYYY-MM-DD HH:mm:ss`，前端不会收到 NaN/NaT；
+- 数据表不存在返回 `404 TABLE_NOT_FOUND`，多表目录关闭返回 `503 TABLE_PREVIEW_UNAVAILABLE`；
+- Java 网关只透传 JSON，前端仍只访问 8080。
 
 ## 扩展数据源
 

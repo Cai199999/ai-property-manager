@@ -31,9 +31,7 @@ UPLOAD_INDEX_NAME = "upload_index.json"
 _REPORT_MARKERS = frozenset({"单号", "登记时间", "项目名称", "处理状态"})
 _DATE_NAME_RE = re.compile(r"时间|日期|date|time|_at$", re.IGNORECASE)
 _DATE_VALUE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}")
-_ID_NAME_RE = re.compile(
-    r"编号|单号|代码|电话|手机|(^|[^a-z])id($|[^a-z])", re.IGNORECASE
-)
+_ID_NAME_RE = re.compile(r"编号|单号|代码|电话|手机|(^|[^a-z])id($|[^a-z])", re.IGNORECASE)
 _KEY_NAME_RE = re.compile(r"编号|单号|代码|(^|[^a-z])id($|[^a-z])", re.IGNORECASE)
 _VALID_ROLES = frozenset({"fact", "dimension", "table"})
 
@@ -64,6 +62,7 @@ class ParsedTable:
     sheet_name: str
     header_row: int
     warnings: tuple[str, ...] = ()
+    derived_columns: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -79,6 +78,7 @@ class TableDataset:
     role: str = "table"
     description: str = ""
     schema_group: str = ""
+    derived_columns: tuple[str, ...] = ()
     primary_key: tuple[str, ...] = ()
     time_column: str | None = None
     foreign_keys: tuple[ForeignKeyInfo, ...] = ()
@@ -169,9 +169,7 @@ class TableCatalog:
             try:
                 parsed = self._read_cached(path)
             except Exception as exc:  # noqa: BLE001 - 单表损坏不应拖垮整个目录
-                logger.warning(
-                    "跳过无法解析的数据表 %s: %s", path.name, type(exc).__name__
-                )
+                logger.warning("跳过无法解析的数据表 %s: %s", path.name, type(exc).__name__)
                 warnings.append(f"文件 {path.name} 无法解析，已跳过")
                 continue
             parsed_by_file[path.name] = parsed
@@ -192,9 +190,7 @@ class TableCatalog:
             entry = manifest_by_file.get(path.name, {})
             upload_meta = upload_index.get(path.name, {})
             base_name = (
-                _text(entry.get("name"))
-                or _text(upload_meta.get("original_stem"))
-                or path.stem
+                _text(entry.get("name")) or _text(upload_meta.get("original_stem")) or path.stem
             )
             name = _unique_name(base_name or "未命名表", used_names)
             used_names.add(name)
@@ -245,6 +241,7 @@ class TableCatalog:
                     role=role,
                     description=_text(entry.get("description")),
                     schema_group=_text(entry.get("schema_group")),
+                    derived_columns=parsed.derived_columns,
                     primary_key=primary_key,
                     time_column=time_column,
                     foreign_keys=foreign_keys,
@@ -359,13 +356,18 @@ def read_table_file(
 
     # 报表同构文件仍保持 46 列；费用金额只在内存分析表中派生，
     # 与 RPA 单表链路使用同一套稳定哈希规则。
+    source_columns = {str(column) for column in data.columns}
     data = add_derived_amount(data)
+    derived_columns = tuple(
+        str(column) for column in data.columns if str(column) not in source_columns
+    )
 
     return ParsedTable(
         frame=data.reset_index(drop=True),
         sheet_name=sheet_name,
         header_row=header_row,
         warnings=tuple(warnings),
+        derived_columns=derived_columns,
     )
 
 
@@ -428,9 +430,7 @@ def _load_manifest(directory: Path, warnings: list[str]) -> list[dict[str, Any]]
     return [entry for entry in tables if isinstance(entry, dict)]
 
 
-def _load_upload_index(
-    directory: Path, warnings: list[str]
-) -> dict[str, dict[str, Any]]:
+def _load_upload_index(directory: Path, warnings: list[str]) -> dict[str, dict[str, Any]]:
     path = directory / UPLOAD_INDEX_NAME
     if not path.is_file():
         return {}
@@ -441,9 +441,7 @@ def _load_upload_index(
         return {}
     if not isinstance(payload, dict):
         return {}
-    return {
-        str(key): value for key, value in payload.items() if isinstance(value, dict)
-    }
+    return {str(key): value for key, value in payload.items() if isinstance(value, dict)}
 
 
 def _detect_header_row(preview: pd.DataFrame) -> int | None:
@@ -487,17 +485,13 @@ def _normalize_headers(values: list[Any], width: int) -> list[str]:
 def _normalize_series(series: pd.Series, column: str) -> pd.Series:
     """做轻量类型收敛，便于模型写出正确的 merge/agg 代码。"""
     if series.dtype == object:
-        series = series.map(
-            lambda value: value.strip() if isinstance(value, str) else value
-        )
+        series = series.map(lambda value: value.strip() if isinstance(value, str) else value)
 
     non_null = int(series.notna().sum())
     if non_null == 0:
         return series
 
-    looks_like_date = (
-        bool(_DATE_NAME_RE.search(column)) or _date_value_ratio(series) >= 0.9
-    )
+    looks_like_date = bool(_DATE_NAME_RE.search(column)) or _date_value_ratio(series) >= 0.9
     if looks_like_date and not _is_identifier_column(column):
         parsed = pd.to_datetime(series, errors="coerce")
         if int(parsed.notna().sum()) >= max(1, int(non_null * 0.8)):
@@ -546,9 +540,7 @@ def _resolve_columns(
 ) -> tuple[str, ...]:
     if raw is None:
         return ()
-    values = (
-        [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
-    )
+    values = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
     columns = tuple(str(value).strip() for value in values if str(value).strip())
     missing = [column for column in columns if column not in frame.columns]
     if missing:
@@ -600,15 +592,9 @@ def _parse_foreign_keys(
             continue
         referenced_table = _text(reference.get("table"))
         referenced_columns = tuple(
-            str(value).strip()
-            for value in _as_list(reference.get("columns"))
-            if str(value).strip()
+            str(value).strip() for value in _as_list(reference.get("columns")) if str(value).strip()
         )
-        if (
-            not columns
-            or not referenced_table
-            or len(columns) != len(referenced_columns)
-        ):
+        if not columns or not referenced_table or len(columns) != len(referenced_columns):
             warnings.append(f"表 {table_name} 有一条外键定义不完整，已忽略")
             continue
         result.append(
@@ -726,8 +712,7 @@ def _validate_foreign_keys(datasets: list[TableDataset], warnings: list[str]) ->
 
             try:
                 left_values = {
-                    str(value)
-                    for value in table.frame[foreign_key.columns[0]].dropna().unique()
+                    str(value) for value in table.frame[foreign_key.columns[0]].dropna().unique()
                 }
                 right_values = {
                     str(value)
