@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pandas as pd
 
+from app.adapters.report_schema import looks_like_report_frame, normalize_report_frame
 from app.core.exceptions import DataContractError
 from app.domain.work_orders import REQUIRED_WORK_ORDER_COLUMNS, WorkOrderColumn
 from app.schemas.assistant import TimeRange
@@ -24,6 +25,10 @@ def normalize_work_order_frame(
     适配器各自的过滤逻辑可能因导出规则不同而有偏差，这里是统一兜底，
     确保进入 Pandas 汇总的数据严格落在用户请求范围内。
     """
+    # 真实 RPA 导出件是 46 列中文报表，先走专用映射，再进入统一清洗。
+    if looks_like_report_frame(frame):
+        return normalize_report_frame(frame, time_range, property_name)
+
     missing = [column for column in REQUIRED_WORK_ORDER_COLUMNS if column not in frame.columns]
     if missing:
         raise DataContractError(

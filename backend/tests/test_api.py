@@ -28,7 +28,10 @@ def test_query_uses_fallback_parser_and_returns_pandas_summary(tmp_path: Path) -
         response = client.post(
             "/api/v1/assistant/query",
             headers={"X-Request-Id": "test-request-001"},
-            json={"message": "查询2026年9月1日至2026年9月5日的工单", "property_name": "樱花苑"},
+            json={
+                "message": "查询2026年9月1日至2026年9月5日的工单",
+                "property_name": "望京国际研发园",
+            },
         )
 
     assert response.status_code == 200

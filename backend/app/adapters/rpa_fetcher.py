@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 
 import anyio
@@ -17,6 +16,37 @@ from app.adapters.rpa_driver import RpaExportDriver, SimulatedRpaExportDriver
 from app.core.exceptions import DataFetchError
 
 logger = logging.getLogger(__name__)
+
+
+def read_work_order_excel(path: Path) -> pd.DataFrame:
+    """读取工单 Excel，并兼容「标题行 + 表头行」与普通单行表头。
+
+    真实「工单汇总查询」导出件第 1 行是合并标题，第 2 行才是列名；
+    模拟器和真实系统共用此读取逻辑，避免把标题误当成 DataFrame 列名。
+    """
+    raw = pd.read_excel(path, engine="openpyxl", header=None, dtype=object)
+    if raw.empty:
+        return raw
+
+    header_index = 0
+    for index in range(min(10, len(raw))):
+        values = {
+            str(value).strip()
+            for value in raw.iloc[index].tolist()
+            if pd.notna(value) and str(value).strip()
+        }
+        if {"单号", "登记时间"}.issubset(values):
+            header_index = index
+            break
+
+    headers: list[str] = []
+    for index, value in enumerate(raw.iloc[header_index].tolist(), start=1):
+        name = str(value).strip() if pd.notna(value) else ""
+        headers.append(name or f"未命名列{index}")
+
+    frame = raw.iloc[header_index + 1 :].copy()
+    frame.columns = headers
+    return frame.dropna(how="all").reset_index(drop=True)
 
 
 class RPAFetcher(DataFetcher):
@@ -48,7 +78,7 @@ class RPAFetcher(DataFetcher):
                 self._download_dir,
             )
             frame = await anyio.to_thread.run_sync(
-                partial(pd.read_excel, engine="openpyxl"),
+                read_work_order_excel,
                 downloaded_file,
             )
         except DataFetchError:

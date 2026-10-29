@@ -2,7 +2,7 @@
 
 自然语言驱动的物业工单查询系统：DeepSeek 解析时间范围 → 数据源适配器获取数据 → Pandas 汇总 → Java 网关统一对外。
 
-第一阶段使用 RPA 模拟下载 Excel，但适配器层已按生产环境设计，可在不改 Agent 代码的前提下切换到真实 RPA 或 HTTP API。
+第一阶段使用 RPA 模拟下载 Excel，模拟文件完全复刻真实「工单汇总查询」导出件的标题行、46 列业务表头和明细版式；适配器层已按生产环境设计，可在不改 Agent 代码的前提下切换到真实 RPA 或 HTTP API。
 
 ## 架构
 
@@ -20,6 +20,7 @@ Python FastAPI Agent :8000
   │
   ├─ DataFetcherRegistry
   │    ├─ RPAFetcher  ── RpaExportDriver ── SimulatedRpaExportDriver（第一阶段）
+  │    │                 └─ 真实报表 46 列结构 -> 统一工单列映射
   │    └─ APIFetcher  ── 第二阶段占位实现
   │
   └─ Pandas 汇总（指标 + 项目/类型/状态分组 + 明细预览）
@@ -104,7 +105,7 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
   -H 'X-Request-Id: demo-001' \
   -d '{
     "message": "汇总上个月的工单数据",
-    "property_name": "樱花苑"
+    "property_name": "望京国际研发园"
   }' | python3 -m json.tool
 ```
 
@@ -117,7 +118,7 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
 ```json
 {
   "message": "汇总上个月的工单数据",
-  "property_name": "樱花苑"
+  "property_name": "望京国际研发园"
 }
 ```
 
@@ -146,7 +147,7 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query \
     "completed_count": 70,
     "completion_rate": 0.7778,
     "average_satisfaction": 4.21,
-    "by_project": [{"name": "樱花苑", "count": 90, "amount": 82345.67}],
+    "by_project": [{"name": "望京国际研发园", "count": 90, "amount": 82345.67}],
     "by_repair_type": [],
     "by_status": []
   },
@@ -191,7 +192,15 @@ registry.register("mcp", lambda settings: McpFetcher(settings))
 
 实现 `RpaExportDriver` 协议（`download_work_orders`），用 Playwright 完成登录、筛选、导出，返回下载后的 Excel 路径，然后注入 `RPAFetcher(download_dir=..., driver=PlaywrightRpaExportDriver(...))`。
 
-第一阶段模拟器生成的文件位于 `backend/.runtime/rpa_downloads/`。
+第一阶段模拟器生成的文件位于 `backend/.runtime/rpa_downloads/`。导出件结构对齐真实报表：
+
+- 工作表：`Sheet0`
+- 第 1 行：合并单元格标题「工单汇总查询」
+- 第 2 行：46 个业务列名
+- 第 3 行起：工单明细
+- 列宽、表头底纹、细边框、行高与真实导出件一致
+
+`backend/app/adapters/report_schema.py` 负责识别该结构，并把原始列映射为平台统一的工单列。真实报表没有费用列，模拟费用会按单号稳定生成，保证同一工单多次查询金额一致。
 
 ### 接入真实 API
 
@@ -238,6 +247,6 @@ cd gateway && mvn test
 ## 设计边界
 
 - 当前没有数据库；第一阶段只读 Excel 并即时汇总。
-- RPA 模拟器生成确定性样例数据，仅用于打通链路，不代表真实业务口径。
+- RPA 模拟器按真实导出件结构生成确定性样例数据，仅用于打通链路，不代表真实业务口径。
 - 网关不缓存、不重试；后续可在网关层按幂等键增加缓存/重试策略。
-- 第一阶段不包含前端；FastAPI 与网关均已提供稳定 JSON 契约。
+- 第一阶段前端为静态数据快照看板；FastAPI 与网关均已提供稳定 JSON 契约，后续可切换为实时查询。
