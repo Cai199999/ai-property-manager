@@ -145,7 +145,9 @@ def extract_python_code(content: str, *, max_chars: int) -> ExtractedCode:
         warnings.append("已移除 Markdown 代码围栏")
     elif len(blocks) > 1:
         # 多个代码块时只接受唯一包含 result_df 的块，避免猜错结果。
-        result_blocks = [block for block in blocks if _contains_result_assignment(block)]
+        result_blocks = [
+            block for block in blocks if _contains_result_assignment(block)
+        ]
         if len(result_blocks) != 1:
             raise CodeExtractionError("模型返回了多个代码块，无法确定最终结果代码")
         code = result_blocks[0]
@@ -177,7 +179,9 @@ def validate_generated_code(code: str, *, max_chars: int) -> ast.Module:
 
     for node in ast.walk(tree):
         if isinstance(node, _DENY_NODE_TYPES):
-            raise UnsafeCodeError(f"禁止使用 {type(node).__name__}（第 {node.lineno} 行）")
+            raise UnsafeCodeError(
+                f"禁止使用 {type(node).__name__}（第 {node.lineno} 行）"
+            )
 
         if isinstance(node, ast.Name):
             if node.id in _DENY_NAMES or _is_dunder(node.id):
@@ -185,11 +189,15 @@ def validate_generated_code(code: str, *, max_chars: int) -> ast.Module:
 
         if isinstance(node, ast.Attribute):
             if _is_dunder(node.attr) or node.attr in _DENY_ATTRS:
-                raise UnsafeCodeError(f"禁止调用属性 {node.attr}（第 {node.lineno} 行）")
+                raise UnsafeCodeError(
+                    f"禁止调用属性 {node.attr}（第 {node.lineno} 行）"
+                )
 
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if _is_dunder(node.name):
-                raise UnsafeCodeError(f"禁止定义双下划线名称 {node.name}（第 {node.lineno} 行）")
+                raise UnsafeCodeError(
+                    f"禁止定义双下划线名称 {node.name}（第 {node.lineno} 行）"
+                )
 
     return tree
 

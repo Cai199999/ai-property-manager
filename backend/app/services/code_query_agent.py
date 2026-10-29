@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from functools import partial
 from time import monotonic, perf_counter
 
@@ -55,6 +55,7 @@ from app.services.code_safety import (
 from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
 from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
+from app.services.time_range import TimeExtraction
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,13 @@ class CodeQueryAgent:
         started_at = perf_counter()
         deadline = monotonic() + self._settings.code_total_timeout_seconds
 
-        extraction = await self._extractor.extract(message)
+        try:
+            extraction = await self._extractor.extract(message)
+        except TimeRangeParseError:
+            # 多文件汇总（如“汇总所有区域的总工单量和总金额”）往往不带时间。
+            # 目录模式有真实数据范围，可默认覆盖全部工单；RPA 单表模式
+            # 仍要求用户明确时间，避免隐式放大查询窗口。
+            extraction = await self._default_directory_extraction()
         _validate_range(extraction.time_range, self._settings)
 
         source = await self._resolve_source(
@@ -191,7 +198,9 @@ class CodeQueryAgent:
                         self._executor.execute,
                         source.frames[source.primary_table],
                         code,
-                        timeout=min(self._settings.code_exec_timeout_seconds, remaining),
+                        timeout=min(
+                            self._settings.code_exec_timeout_seconds, remaining
+                        ),
                         tables=source.frames,
                         primary_table=source.primary_table,
                     )
@@ -203,7 +212,9 @@ class CodeQueryAgent:
             except SandboxTimeoutError as exc:
                 error_message = sanitize_error_text(exc)
                 retry_errors.append(error_message)
-                logger.info("代码执行超时 request_id=%s attempt=%s", request_id, attempt)
+                logger.info(
+                    "代码执行超时 request_id=%s attempt=%s", request_id, attempt
+                )
                 if attempt >= max_attempts:
                     final_timeout = True
                     break
@@ -347,6 +358,31 @@ class CodeQueryAgent:
             return None
         return f"{REPORT_DOWNLOAD_PATH}/{exported.filename}"
 
+    async def _default_directory_extraction(self) -> TimeExtraction:
+        """时间解析失败时，用数据目录覆盖的完整区间兜底。
+
+        只对多表目录生效：目录里已有用户上传的 Excel，默认汇总全部数据
+        比直接返回 422 更符合经营分析的意图；RPA 单表链路保持显式时间。
+        """
+        if self._table_catalog is None:
+            raise TimeRangeParseError("未识别到时间范围，请补充如「上个月」「近 7 天」")
+        snapshot = await anyio.to_thread.run_sync(self._table_catalog.scan)
+        bounds = _snapshot_time_bounds(snapshot)
+        if bounds is None:
+            raise TimeRangeParseError("未识别到时间范围，且数据目录中没有可用的时间列")
+
+        start_date, end_date = bounds
+        return TimeExtraction(
+            time_range=TimeRange(start_date=start_date, end_date=end_date),
+            engine="rule_based",
+            model=None,
+            confidence=1.0,
+            reason="未指定时间，默认使用数据目录覆盖的完整区间",
+            warnings=(
+                f"未识别到时间范围，已默认汇总 {start_date} 至 {end_date} 的全部数据",
+            ),
+        )
+
     async def _resolve_source(
         self,
         *,
@@ -387,13 +423,35 @@ class CodeQueryAgent:
         primary_dataset = by_name[primary]
         frames = {table.name: table.frame for table in snapshot.tables}
 
-        filtered, filter_warnings, time_filtered = _filter_primary_frame(
-            frames[primary],
-            primary_dataset.time_column,
-            time_range=time_range,
-            property_name=property_name,
+        # 同构表组内的每张表都是事实表，必须分别按时间/项目过滤；
+        # 只过滤主表会让其他文件保留全量数据，导致跨文件汇总失真。
+        primary_signature = tuple(
+            str(column) for column in primary_dataset.frame.columns
         )
-        frames[primary] = filtered
+        fact_names = {
+            table.name
+            for table in snapshot.tables
+            if table.role == "fact"
+            or tuple(str(column) for column in table.frame.columns) == primary_signature
+        }
+
+        filter_warnings: list[str] = []
+        time_filtered = False
+        for table in snapshot.tables:
+            if table.name not in fact_names:
+                continue
+            filtered, table_warnings, table_time_filtered = _filter_fact_frame(
+                frames[table.name],
+                table.time_column,
+                time_range=time_range,
+                property_name=property_name,
+                label=f"表 {table.name}",
+            )
+            frames[table.name] = filtered
+            filter_warnings.extend(table_warnings)
+            time_filtered = time_filtered or table_time_filtered
+
+        total_filtered = sum(len(frames[name]) for name in fact_names)
 
         profile = build_catalog_profile(
             snapshot.tables,
@@ -403,6 +461,7 @@ class CodeQueryAgent:
             primary_table=primary,
             time_filtered=time_filtered,
             relationships=snapshot.relationships,
+            homogeneous_groups=snapshot.homogeneous_groups,
             sample_rows=self._settings.code_sample_rows,
         )
         table_infos = [
@@ -416,8 +475,8 @@ class CodeQueryAgent:
         ]
 
         warnings = list(snapshot.warnings) + filter_warnings
-        if filtered.empty:
-            warnings.append("主表在所选时间/项目条件下没有数据")
+        if total_filtered == 0:
+            warnings.append("同构工单表在所选时间/项目条件下没有数据")
 
         return _SourceData(
             frames=frames,
@@ -425,7 +484,7 @@ class CodeQueryAgent:
             profile=profile,
             data_source="directory",
             fetched_at=datetime.now(self._settings.tz),
-            source_row_count=int(len(filtered)),
+            source_row_count=int(total_filtered),
             source_file=primary_dataset.file_name,
             tables=table_infos,
             warnings=_dedupe(warnings),
@@ -475,14 +534,15 @@ class CodeQueryAgent:
         )
 
 
-def _filter_primary_frame(
+def _filter_fact_frame(
     frame: pd.DataFrame,
     time_column: str | None,
     *,
     time_range: TimeRange,
     property_name: str | None,
+    label: str,
 ) -> tuple[pd.DataFrame, list[str], bool]:
-    """只过滤主表，维表保持全量，避免错误裁剪项目/人员主数据。"""
+    """按时间/项目过滤一张事实表，维表不调用此函数。"""
     warnings: list[str] = []
     filtered = frame
     time_filtered = False
@@ -497,13 +557,13 @@ def _filter_primary_frame(
             filtered = filtered.loc[mask.fillna(False)].copy()
             time_filtered = True
             if dropped:
-                warnings.append(f"主表有 {dropped} 行登记时间超出查询范围，已排除")
+                warnings.append(f"{label} 有 {dropped} 行登记时间超出查询范围，已排除")
         else:
-            warnings.append(f"主表时间列 {time_column} 无法解析，未按时间过滤")
+            warnings.append(f"{label} 的时间列 {time_column} 无法解析，未按时间过滤")
     elif time_column:
-        warnings.append(f"主表时间列 {time_column} 不存在，未按时间过滤")
+        warnings.append(f"{label} 的时间列 {time_column} 不存在，未按时间过滤")
     else:
-        warnings.append("主表未识别到时间列，未按时间过滤")
+        warnings.append(f"{label} 未识别到时间列，未按时间过滤")
 
     if property_name:
         if "项目名称" in filtered.columns:
@@ -516,9 +576,41 @@ def _filter_primary_frame(
             )
             filtered = filtered.loc[project_mask].copy()
         else:
-            warnings.append("主表没有项目名称列，已忽略项目过滤条件")
+            warnings.append(f"{label} 没有项目名称列，已忽略项目过滤条件")
 
     return filtered.reset_index(drop=True), warnings, time_filtered
+
+
+def _snapshot_time_bounds(
+    snapshot: TableSnapshot,
+) -> tuple[date, date] | None:
+    """汇总事实表时间列的全局最小/最大值。
+
+    同构表可能来自不同月份，取所有文件并集才能覆盖完整数据。
+    """
+    fact_names = {table.name for table in snapshot.tables if table.role == "fact"}
+    for group in snapshot.homogeneous_groups:
+        fact_names.update(str(name) for name in group.get("tables", ()))
+
+    lower: pd.Timestamp | None = None
+    upper: pd.Timestamp | None = None
+    for table in snapshot.tables:
+        if fact_names and table.name not in fact_names:
+            continue
+        if not table.time_column or table.time_column not in table.frame.columns:
+            continue
+        parsed = pd.to_datetime(table.frame[table.time_column], errors="coerce")
+        parsed = parsed.dropna()
+        if parsed.empty:
+            continue
+        table_min = parsed.min()
+        table_max = parsed.max()
+        lower = table_min if lower is None else min(lower, table_min)
+        upper = table_max if upper is None else max(upper, table_max)
+
+    if lower is None or upper is None:
+        return None
+    return lower.date(), upper.date()
 
 
 def _validate_range(time_range: TimeRange, settings: Settings) -> None:

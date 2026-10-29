@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 /**
  * 对前端暴露的稳定入口。
  *
@@ -69,11 +71,11 @@ public class AssistantGatewayController {
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
     public ResponseEntity<JsonNode> upload(
-            @RequestPart("file") MultipartFile file,
+            @RequestPart("file") List<MultipartFile> files,
             HttpServletRequest servletRequest
     ) {
-        JsonNode response = agentGatewayService.uploadTable(
-                file,
+        JsonNode response = agentGatewayService.uploadTables(
+                files,
                 requestId(servletRequest)
         );
         return ResponseEntity.ok(response);

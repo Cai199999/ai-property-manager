@@ -969,8 +969,8 @@
           <button class="query-button query-button--secondary" id="analyzeButton"
                   type="button" title="多表联查并生成动态结果">智能分析</button>
           <button class="query-button query-button--secondary" id="uploadButton"
-                  type="button" title="导入 .xlsx 文件，最大 20 MB">导入文件</button>
-          <input id="uploadInput" type="file"
+                  type="button" title="可多选导入 .xlsx 文件，合计最大 20 MB">导入文件</button>
+          <input id="uploadInput" type="file" multiple
                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         </form>
         <p class="query-status upload-status" id="uploadStatus" role="status"
@@ -1141,6 +1141,8 @@
       const tableEndpoint = `${apiBase}/tables`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
       const maxUploadBytes = 20 * 1024 * 1024;
+      // 与网关 gateway.agent.upload-max-files、后端 TABLE_UPLOAD_MAX_FILES 保持一致。
+      const maxUploadFiles = 10;
       const maxDynamicRows = 200;
       const emptyPrompt = "请输入自然语言开始查询";
       const emptyResultMessage = "该时间范围内没有符合条件的工单";
@@ -1894,27 +1896,44 @@
         if (isUploading) {
           return;
         }
-        const file = uploadInput.files && uploadInput.files[0];
+        const files = Array.from(uploadInput.files || []);
         uploadInput.value = "";
-        if (!file) {
+        if (!files.length) {
           return;
         }
-        if (!file.name.toLowerCase().endsWith(".xlsx")) {
-          showUploadStatus("只支持 .xlsx 文件。", "error");
+        if (files.length > maxUploadFiles) {
+          showUploadStatus(`单次最多导入 ${maxUploadFiles} 个文件。`, "error");
           return;
         }
-        if (file.size > maxUploadBytes) {
-          showUploadStatus("文件超过 20 MB 限制。", "error");
+        // 先整体校验，避免上传到一半才发现某个文件不合规。
+        let totalBytes = 0;
+        for (const file of files) {
+          if (!file.name.toLowerCase().endsWith(".xlsx")) {
+            showUploadStatus(`只支持 .xlsx 文件：${file.name}`, "error");
+            return;
+          }
+          totalBytes += file.size;
+        }
+        if (totalBytes > maxUploadBytes) {
+          showUploadStatus("文件合计超过 20 MB 限制。", "error");
           return;
         }
 
         isUploading = true;
         setUploading(true);
-        showUploadStatus(`正在导入 ${file.name}…`, "loading");
+        showUploadStatus(
+          files.length === 1
+            ? `正在导入 ${files[0].name}…`
+            : `正在导入 ${files.length} 个文件…`,
+          "loading"
+        );
 
         try {
           const formData = new FormData();
-          formData.append("file", file, file.name);
+          // 重复使用 file 字段，后端按 multipart 顺序逐个接收。
+          for (const file of files) {
+            formData.append("file", file, file.name);
+          }
           const response = await fetch(uploadEndpoint, {
             method: "POST",
             body: formData
@@ -1932,10 +1951,23 @@
           }
 
           renderTableCatalog(payload.tables, payload.primary_table);
-          const imported = payload.imported;
-          let message = `已导入 ${imported.name} · `
-            + `${numberFormatter.format(imported.row_count)} 行 × `
-            + `${numberFormatter.format(imported.column_count)} 列`;
+          // 新后端返回 imported_tables；兼容只返回单个 imported 的旧响应。
+          const importedTables = Array.isArray(payload.imported_tables)
+            && payload.imported_tables.length
+            ? payload.imported_tables
+            : (payload.imported ? [payload.imported] : []);
+          let message;
+          if (importedTables.length === 1) {
+            const imported = importedTables[0];
+            message = `已导入 ${imported.name} · `
+              + `${numberFormatter.format(imported.row_count)} 行 × `
+              + `${numberFormatter.format(imported.column_count)} 列`;
+          } else {
+            message = `已导入 ${importedTables.length} 个文件：`
+              + importedTables
+                .map((table) => `${table.name}（${numberFormatter.format(table.row_count)} 行）`)
+                .join("、");
+          }
           if (Array.isArray(payload.warnings) && payload.warnings.length) {
             message += ` · ${payload.warnings.join("；")}`;
           }

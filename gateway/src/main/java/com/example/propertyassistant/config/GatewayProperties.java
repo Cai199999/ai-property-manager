@@ -29,6 +29,7 @@ public record GatewayProperties(
         @Min(1) long maxJsonResponseBytes,
         @Min(1) long downloadMaxBytes,
         @Min(1) int downloadMaxConcurrent,
-        @Min(1) long uploadMaxBytes
+        @Min(1) long uploadMaxBytes,
+        @Min(1) int uploadMaxFiles
 ) {
 }

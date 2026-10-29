@@ -102,7 +102,10 @@ class RuleBasedTimeParser:
                 ("昨天", "昨日"),
                 lambda: (today - timedelta(days=1), today - timedelta(days=1), "昨天"),
             ),
-            (("前天",), lambda: (today - timedelta(days=2), today - timedelta(days=2), "前天")),
+            (
+                ("前天",),
+                lambda: (today - timedelta(days=2), today - timedelta(days=2), "前天"),
+            ),
             (
                 ("本周", "这周", "本星期", "这个星期"),
                 lambda: (today - timedelta(days=today.weekday()), today, "本周至今"),
@@ -142,7 +145,11 @@ class RuleBasedTimeParser:
             (("今年", "本年"), lambda: (date(today.year, 1, 1), today, "今年至今")),
             (
                 ("去年", "上一年"),
-                lambda: (date(today.year - 1, 1, 1), date(today.year - 1, 12, 31), "去年"),
+                lambda: (
+                    date(today.year - 1, 1, 1),
+                    date(today.year - 1, 12, 31),
+                    "去年",
+                ),
             ),
         )
 
@@ -155,7 +162,9 @@ class RuleBasedTimeParser:
     @staticmethod
     def _previous_quarter(today: date) -> tuple[date, date, str]:
         current_quarter_start_month = ((today.month - 1) // 3) * 3 + 1
-        previous_quarter_end = date(today.year, current_quarter_start_month, 1) - timedelta(days=1)
+        previous_quarter_end = date(
+            today.year, current_quarter_start_month, 1
+        ) - timedelta(days=1)
         previous_quarter_start = date(
             previous_quarter_end.year,
             ((previous_quarter_end.month - 1) // 3) * 3 + 1,
@@ -191,7 +200,9 @@ class RuleBasedTimeParser:
                 start = today.replace(year=today.year - count) + timedelta(days=1)
             except ValueError:
                 # 2 月 29 日回退到平年时取 2 月 28 日。
-                start = today.replace(year=today.year - count, day=28) + timedelta(days=1)
+                start = today.replace(year=today.year - count, day=28) + timedelta(
+                    days=1
+                )
             label = f"近{count}年"
 
         return self._result(start, today, f"命中滚动时间窗口「{label}」", 0.9)
@@ -235,7 +246,9 @@ class RuleBasedTimeParser:
 
         return self._result(start, end, "识别到显式日期区间", 0.98)
 
-    def _parse_calendar_expression(self, text: str, today: date) -> TimeExtraction | None:
+    def _parse_calendar_expression(
+        self, text: str, today: date
+    ) -> TimeExtraction | None:
         # 单日：2026年9月1日 / 9月1日 / 9月1号。
         day_match = re.search(
             r"(?:(?P<year>\d{4})年)?(?P<month>\d{1,2})月(?P<day>\d{1,2})[日号]",
@@ -244,7 +257,9 @@ class RuleBasedTimeParser:
         if day_match:
             year = int(day_match.group("year") or today.year)
             try:
-                target = date(year, int(day_match.group("month")), int(day_match.group("day")))
+                target = date(
+                    year, int(day_match.group("month")), int(day_match.group("day"))
+                )
             except ValueError as exc:
                 raise TimeRangeParseError("日期表达式非法，请检查月份和日期") from exc
             if not day_match.group("year"):
@@ -288,7 +303,9 @@ class RuleBasedTimeParser:
         )
 
     @staticmethod
-    def _result(start: date, end: date, reason: str, confidence: float) -> TimeExtraction:
+    def _result(
+        start: date, end: date, reason: str, confidence: float
+    ) -> TimeExtraction:
         if start > end:
             raise TimeRangeParseError("开始日期不能晚于结束日期")
         return TimeExtraction(

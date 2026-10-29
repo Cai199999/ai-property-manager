@@ -17,57 +17,59 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_catalog_scans_tables_and_manifest_relationships(tmp_path: Path) -> None:
-    generate_mock_tables(tmp_path)
+def test_catalog_detects_homogeneous_tables(tmp_path: Path) -> None:
+    summary = generate_mock_tables(tmp_path)
     catalog = TableCatalog(_settings(tmp_path))
 
     snapshot = catalog.scan()
 
+    names = {"工单表_A区", "工单表_B区", "工单表_C区"}
     assert snapshot.has_tables
-    assert snapshot.primary_table == "工单表"
-    assert {table.name for table in snapshot.tables} == {"工单表", "项目表", "人员表"}
+    assert snapshot.primary_table == "工单表_A区"
+    assert {table.name for table in snapshot.tables} == names
     assert snapshot.warnings == ()
 
-    orders = snapshot.table_map()["工单表"]
-    assert orders.role == "fact"
-    assert orders.row_count == 150
-    assert orders.time_column == "登记时间"
-    assert orders.primary_key == ("单号",)
-    assert {foreign_key.referenced_table for foreign_key in orders.foreign_keys} == {
-        "项目表",
-        "人员表",
-    }
-    assert any(
-        relationship["source"] == "manifest"
-        and relationship["from_table"] == "工单表"
-        and relationship["to_table"] == "项目表"
-        for relationship in snapshot.relationships
-    )
+    for table in snapshot.tables:
+        assert table.role == "fact"
+        assert table.schema_group == "work_orders"
+        assert table.row_count == summary["tables"][table.name]
+        # 原始 46 列 + 内存派生的费用金额。
+        assert table.column_count == 47
+        assert "费用金额" in table.frame.columns
+        assert table.primary_key == ("单号",)
+        assert table.time_column == "登记时间"
+        assert table.foreign_keys == ()
+        # 同构表之间不能生成 join 提示，否则模型可能按业务列做笛卡尔积。
+        assert table.possible_join_keys == ()
 
-    # 同名列只作为候选提示，不能冒充 manifest 外键。
-    assert any(
-        hint["columns"] == ["项目名称", "项目编号"]
-        for hint in orders.possible_join_keys
-    )
+    assert snapshot.relationships == ()
+    assert len(snapshot.homogeneous_groups) == 1
+    group = snapshot.homogeneous_groups[0]
+    assert group["name"] == "work_orders"
+    assert group["tables"] == ["工单表_A区", "工单表_B区", "工单表_C区"]
+    assert group["concat_recommended"] is True
+    assert len(group["columns"]) == 47
 
 
 def test_catalog_uses_upload_index_for_display_name(tmp_path: Path) -> None:
-    generate_mock_tables(tmp_path)
-    source = tmp_path / "项目表.xlsx"
-    target = tmp_path / "upload_abc123_项目表.xlsx"
+    summary = generate_mock_tables(tmp_path)
+    source = tmp_path / "工单表_A区.xlsx"
+    target = tmp_path / "upload_abc123_work_orders.xlsx"
     target.write_bytes(source.read_bytes())
     (tmp_path / "upload_index.json").write_text(
-        json.dumps({"upload_abc123_项目表.xlsx": {"original_stem": "园区项目表"}}),
+        json.dumps({"upload_abc123_work_orders.xlsx": {"original_stem": "九月工单"}}),
         encoding="utf-8",
     )
 
     snapshot = TableCatalog(_settings(tmp_path)).scan()
 
-    assert "园区项目表" in snapshot.table_map()
-    uploaded = snapshot.table_map()["园区项目表"]
-    assert uploaded.row_count == 8
+    assert "九月工单" in snapshot.table_map()
+    uploaded = snapshot.table_map()["九月工单"]
+    assert uploaded.row_count == summary["tables"]["工单表_A区"]
     # 没有 manifest 声明的上传件不会被自动赋予外键。
     assert uploaded.foreign_keys == ()
+    # 同构关系由列签名自动识别，上传件也应归入同一组。
+    assert any("九月工单" in group["tables"] for group in snapshot.homogeneous_groups)
 
 
 def test_catalog_skips_corrupt_file_without_failing(tmp_path: Path) -> None:

@@ -344,10 +344,20 @@ class AssistantGatewayIntegrationTest {
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
         headers.set("X-Request-Id", "gateway-upload-001");
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("file", new ByteArrayResource("fake-xlsx-content".getBytes(StandardCharsets.UTF_8)) {
+        body.add("file", new ByteArrayResource(
+                "fake-xlsx-content-a".getBytes(StandardCharsets.UTF_8)
+        ) {
             @Override
             public String getFilename() {
-                return "园区项目表.xlsx";
+                return "工单表_A区.xlsx";
+            }
+        });
+        body.add("file", new ByteArrayResource(
+                "fake-xlsx-content-b".getBytes(StandardCharsets.UTF_8)
+        ) {
+            @Override
+            public String getFilename() {
+                return "工单表_B区.xlsx";
             }
         });
 
@@ -361,11 +371,14 @@ class AssistantGatewayIntegrationTest {
         assertThat(upload.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(FORWARDED_REQUEST_ID.get()).isEqualTo("gateway-upload-001");
         assertThat(FORWARDED_UPLOAD_CONTENT_TYPE.get()).startsWith("multipart/form-data");
-        assertThat(FORWARDED_UPLOAD_BODY.get()).contains("fake-xlsx-content");
+        assertThat(FORWARDED_UPLOAD_BODY.get())
+                .contains("fake-xlsx-content-a")
+                .contains("fake-xlsx-content-b");
         // 文件段使用 ASCII 安全文件名，原始中文名放到独立 filename 字段，
         // 避免 RFC 2047 encoded-word 让 Python 的 .xlsx 后缀校验失败。
         assertThat(FORWARDED_UPLOAD_BODY.get())
-                .contains("filename=\"upload.xlsx\"")
+                .contains("filename=\"upload_1.xlsx\"")
+                .contains("filename=\"upload_2.xlsx\"")
                 .doesNotContain("=?UTF-8?");
         String forwardedUtf8 = new String(
                 FORWARDED_UPLOAD_BODY.get().getBytes(StandardCharsets.ISO_8859_1),
@@ -373,7 +386,8 @@ class AssistantGatewayIntegrationTest {
         );
         assertThat(forwardedUtf8)
                 .contains("name=\"filename\"")
-                .contains("园区项目表.xlsx");
+                .contains("工单表_A区.xlsx")
+                .contains("工单表_B区.xlsx");
         assertThat(upload.getBody()).contains("园区项目表");
     }
 

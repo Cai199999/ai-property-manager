@@ -115,7 +115,7 @@ def test_code_generator_requires_api_key() -> None:
     asyncio.run(generator.aclose())
 
 
-def test_multi_table_prompt_contains_relationships_and_merge_rules(
+def test_multi_table_prompt_requires_concat_for_homogeneous_tables(
     tmp_path: Path,
 ) -> None:
     generate_mock_tables(tmp_path)
@@ -130,18 +130,25 @@ def test_multi_table_prompt_contains_relationships_and_merge_rules(
         primary_table=snapshot.primary_table or "",
         time_filtered=True,
         relationships=snapshot.relationships,
+        homogeneous_groups=snapshot.homogeneous_groups,
         sample_rows=2,
     )
 
-    messages = build_initial_messages("按项目区域统计工单量", profile)
+    messages = build_initial_messages("汇总所有区域的总工单量和总金额", profile)
     prompt = messages[1]["content"]
+    system_prompt = messages[0]["content"]
 
     assert "catalog_profile" in prompt
-    assert "工单表" in prompt
-    assert "项目表" in prompt
-    assert "项目编号" in prompt
-    assert "pd.merge" in messages[0]["content"]
-    assert "manifest" in messages[1]["content"]
-    assert "T-" not in prompt
+    assert "homogeneous_groups" in prompt
+    assert "工单表_A区" in prompt
+    assert "工单表_B区" in prompt
+    assert "工单表_C区" in prompt
+    # 同构表必须纵向拼接，明确禁止 merge。
+    assert "pd.concat" in system_prompt
+    assert "pd.merge" in system_prompt
+    assert "严禁" in system_prompt
+    assert "nunique" in system_prompt
+    assert "费用金额" in system_prompt
     # 单号等直接标识在样例中必须脱敏。
+    assert "T-" not in prompt
     assert "202609" not in prompt

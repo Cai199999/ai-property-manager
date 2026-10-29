@@ -101,7 +101,7 @@ cd /home/admin1/Workspace/ai-property-manager
 
 - **查询**：调用固定 Schema 的 `/api/v1/assistant/query`，渲染月报指标和既有看板；
 - **智能分析**：调用 `/api/v1/assistant/query/code`，按响应中的 `result.columns/rows` 动态渲染表格，并按 `chart_meta` 渲染柱状图、折线图或饼图；
-- **导入文件**：向 `/api/v1/assistant/tables/upload` 上传 `.xlsx`，随后可基于新表做多表分析。
+- **导入文件**：向 `/api/v1/assistant/tables/upload` 一次上传一个或多个 `.xlsx`，随后可基于新表做多文件汇总分析。
 
 响应包含 `download_url` 时，页面会显示“下载 Excel”按钮，链接指向 Java 网关的下载接口；前端不会直接访问 8000。
 
@@ -257,53 +257,73 @@ command -v bwrap
 
 如果看到 `CODE_SANDBOX_UNAVAILABLE`，说明沙箱条件不满足，接口会拒绝执行而不是降级。
 
-## 多表联查与文件导入
+## 多文件汇总与文件导入
 
-### 1. 生成 Mock 多表
+### 1. 生成同构 Mock 工单表
 
 ```bash
 ./scripts/generate_mock_tables.py
 ```
 
-默认输出到 `backend/.runtime/rpa_downloads/tables/`：
+默认输出到 `backend/.runtime/rpa_downloads/tables/`。三个文件模拟不同区域分次导出的工单，**表头与 `report+(5).xlsx` 完全一致（46 列、顺序相同）**，只有数据不同：
 
-| 表 | 行数 | 主键 | 外键 |
+| 表 | 行数 | 单号前缀 | schema_group |
 | --- | --- | --- | --- |
-| 工单表 | 150 | 单号 | 项目编号 → 项目表；接单人编号、维修人员编号 → 人员表 |
-| 项目表 | 8 | 项目编号 | — |
-| 人员表 | 24 | 人员编号 | 所属项目编号 → 项目表 |
+| 工单表_A区 | 420 | `A-` | `work_orders` |
+| 工单表_B区 | 360 | `B-` | `work_orders` |
+| 工单表_C区 | 139 | `C-` | `work_orders` |
 
-生成器先构造项目和人员主数据，再从主数据抽取工单外键；固定 seed，生成前断言主键唯一、外键 100% 覆盖、人员与工单属于同一项目。`manifest.json` 声明主键、外键、时间列和事实/维表角色。
+固定 seed 保证生成结果可复现。旧的外键 Mock（`工单表.xlsx`、`项目表.xlsx`、`人员表.xlsx`）会在生成时删除，`manifest.json` 使用 v2 格式声明同构组：
+
+```json
+{
+  "version": 2,
+  "schema_groups": [
+    {
+      "name": "work_orders",
+      "tables": ["工单表_A区", "工单表_B区", "工单表_C区"],
+      "concat_recommended": true
+    }
+  ]
+}
+```
+
+> 真实报表没有费用列。为支持“总金额”分析，`TableCatalog` 读取报表同构文件时会在**内存中**派生 `费用金额`：复用 RPA 链路的稳定哈希规则，同一单号每次计算结果一致。磁盘上的 Excel 仍严格保持 46 列，分析表显示 47 列。
 
 ### 2. 动态目录与 Prompt
 
 `TableCatalog` 在每次 `/api/v1/assistant/query/code` 请求时扫描目录（按文件 mtime + size 缓存，上传后主动失效）：
 
-- manifest 中声明的表带主键、外键、时间列、描述；
-- 上传件没有 manifest 时自动推断列类型、主键候选，并把多表同名列标记为 `same_name_hint`，不会自动断言外键；
-- Prompt 注入 `tables`（`dict[str, DataFrame]`）、`source_df`（主表）和 `relationships`；
-- 主表按时间列过滤，维表保持全量；目录为空时自动回退原 RPA 单表链路；
-- 模型必须用 `pd.merge` 显式写连接键，执行失败继续走最多 2 次自我修复。
+- 按有序列名签名自动识别同构组（`homogeneous_groups`），同构表之间不生成 `same_name_hint`，避免把同名列误当连接键；
+- Prompt 注入 `tables`（`dict[str, DataFrame]`）、`source_df`（仅主表）、`relationships` 和 `homogeneous_groups`；
+- 同构组必须使用 `pd.concat([...], ignore_index=True)` 纵向拼接，**严禁 `pd.merge`**；只有 manifest 声明的外键才允许 join；
+- 统计总工单量用 `df["单号"].nunique()`，金额用 `pd.to_numeric(df["费用金额"], errors="coerce").sum()`；
+- 所有事实/同构表都按时间、项目条件过滤，`source_row_count` 为过滤后各文件行数之和；
+- 用户未写时间时，多表模式默认使用目录内时间列覆盖的完整区间（如 2026-09-01 至 2026-09-30）并在 warnings 中说明；RPA 单表模式仍要求明确时间；
+- 目录为空时自动回退原 RPA 单表链路。
 
-沙箱协议同步升级为多表 JSON 传输：`{"frames": {"工单表": {...}, "项目表": {...}}, "primary_table": "工单表"}`，仍然不挂载项目目录、不联网、不执行 pickle。
+沙箱协议仍是多表 JSON 传输：`{"frames": {"工单表_A区": {...}, "工单表_B区": {...}}, "primary_table": "工单表_A区"}`，不挂载项目目录、不联网、不执行 pickle。
 
-### 3. 上传接口
+### 3. 上传接口（支持多文件）
 
 ```bash
 curl -s http://127.0.0.1:8080/api/v1/assistant/tables/upload \
-  -F 'file=@/path/to/园区项目表.xlsx;filename=园区项目表.xlsx' \
+  -F 'file=@/path/to/工单表_A区.xlsx' \
+  -F 'file=@/path/to/工单表_B区.xlsx' \
+  -F 'file=@/path/to/工单表_C区.xlsx' \
   | python3 -m json.tool
 
 curl -s http://127.0.0.1:8080/api/v1/assistant/tables | python3 -m json.tool
 ```
 
-- 只接受 `.xlsx`，默认上限 20 MB、5 万行、100 列，仅导入第一个非空工作表；
+- 一次请求可重复提交 `file` 字段，默认最多 10 个文件、合计 20 MB；单表仍限制 5 万行、100 列，仅导入第一个非空工作表；
+- 响应同时返回 `imported`（第一个文件，兼容旧客户端）和 `imported_tables`（全部成功文件）；部分文件失败时其余文件仍会导入，失败原因放入 `warnings`；
 - 校验 xlsx 压缩包条目数与解压总量，文件名只取 basename，落盘名用 UUID；
 - 上传成功后写入 `upload_index.json` 并刷新目录；
-- Java 网关转发 multipart 时，文件段使用 ASCII 文件名 `upload.xlsx`，原始中文名通过独立表单字段 `filename` 传给 Python，避免 RFC 2047 encoded-word 导致后缀校验失败；
-- 网关限制单文件和单请求大小，超限返回 413；Python 侧再次校验压缩包结构，上传件始终按不可信数据处理。
+- Java 网关转发 multipart 时，文件段使用 ASCII 文件名 `upload_1.xlsx`、`upload_2.xlsx`…，原始中文名按顺序通过独立表单字段 `filename` 传给 Python，避免 RFC 2047 encoded-word 导致后缀校验失败；
+- 网关限制单文件、文件数量和单请求总大小，Python 侧再次校验压缩包结构，上传件始终按不可信数据处理。
 
-前端“导入文件”按钮同样请求 8080，上传成功后刷新“当前数据表”清单。
+前端“导入文件”按钮支持多选，同样只请求 8080；上传成功后刷新“当前数据表”清单并展示本次导入的全部文件。
 
 ## 扩展数据源
 
@@ -359,7 +379,8 @@ PROPERTY_API_KEY=...
 | `TABLE_DIRECTORY_ENABLED` | `true` | 是否启用多表目录 |
 | `DATA_TABLE_DIR` | `.runtime/rpa_downloads/tables` | 多表扫描目录 |
 | `TABLE_MAX_FILES` | `8` | 单次扫描最大表数 |
-| `TABLE_UPLOAD_MAX_BYTES` | `20000000` | 上传文件上限 |
+| `TABLE_UPLOAD_MAX_BYTES` | `20000000` | 单个上传文件上限 |
+| `TABLE_UPLOAD_MAX_FILES` | `10` | 单次请求最多上传文件数 |
 | `CODE_SANDBOX_MODE` | `bwrap` | 代码执行隔离模式，`disabled` 时拒绝执行 |
 | `REPORT_EXPORT_ENABLED` | `true` | 是否生成结果 Excel |
 | `REPORT_EXPORT_DIR` | `.runtime/exports` | 导出文件目录 |

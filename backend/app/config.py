@@ -45,6 +45,7 @@ class Settings(BaseSettings):
         ge=100_000,
         le=100_000_000,
     )
+    table_upload_max_files: int = Field(default=10, ge=1, le=50)
     table_upload_max_uncompressed_bytes: int = Field(
         default=200_000_000,
         ge=1_000_000,
@@ -73,7 +74,9 @@ class Settings(BaseSettings):
     code_max_result_rows: int = Field(default=5_000, ge=1, le=100_000)
     code_max_result_columns: int = Field(default=50, ge=1, le=500)
     code_max_cell_chars: int = Field(default=1_000, ge=10, le=20_000)
-    code_max_payload_bytes: int = Field(default=20_000_000, ge=1_000_000, le=100_000_000)
+    code_max_payload_bytes: int = Field(
+        default=20_000_000, ge=1_000_000, le=100_000_000
+    )
     code_sample_rows: int = Field(default=5, ge=1, le=20)
     code_expose_generated_code: bool = True
 
@@ -120,7 +123,9 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         """把环境变量中的逗号分隔白名单转成列表。"""
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
 
     @property
     def tz(self) -> ZoneInfo:

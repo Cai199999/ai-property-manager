@@ -34,6 +34,7 @@ gateway:
     download-max-bytes: 20000000
     download-max-concurrent: 16
     upload-max-bytes: 20000000
+    upload-max-files: 10
 
 management:
   endpoints:

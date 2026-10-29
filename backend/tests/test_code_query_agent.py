@@ -13,6 +13,7 @@ from app.core.exceptions import (
     CodeExecutionTimeoutError,
     CodeGenerationError,
     CodeSandboxUnavailableError,
+    TimeRangeParseError,
 )
 from app.main import create_app
 from app.schemas.assistant import TimeRange
@@ -156,20 +157,25 @@ class _ExplodingFetcher:
         raise AssertionError("目录模式下不应调用 RPA 抓取")
 
 
+CONCAT_CODE = (
+    'group = ["工单表_A区", "工单表_B区", "工单表_C区"]\n'
+    "orders = pd.concat([tables[name] for name in group], ignore_index=True)\n"
+    "result_df = pd.DataFrame([{\n"
+    '    "总工单量": int(orders["单号"].nunique()),\n'
+    '    "总金额": round(float(\n'
+    '        pd.to_numeric(orders["费用金额"], errors="coerce").sum()\n'
+    "    ), 2),\n"
+    "}])"
+)
+
+
 def test_agent_uses_directory_tables_before_rpa(tmp_path: Path) -> None:
-    generate_mock_tables(tmp_path)
+    summary = generate_mock_tables(tmp_path)
     settings = _settings(
         table_directory_enabled=True,
         data_table_dir=tmp_path,
     )
-    generator = _FakeGenerator(
-        [
-            'merged = tables["工单表"].merge(\n'
-            '    tables["项目表"], on="项目编号", how="left"\n'
-            ")\n"
-            'result_df = merged[["所属区域"]].head(1)'
-        ]
-    )
+    generator = _FakeGenerator([CONCAT_CODE])
     executor = _FakeExecutor([_success()])
     catalog = TableCatalog(settings)
     agent = CodeQueryAgent(
@@ -183,23 +189,66 @@ def test_agent_uses_directory_tables_before_rpa(tmp_path: Path) -> None:
 
     response = asyncio.run(
         agent.handle(
-            message="按项目区域统计工单量",
+            message="汇总所有区域的总工单量和总金额",
             request_id="code-test-directory",
         )
     )
 
+    expected_names = {"工单表_A区", "工单表_B区", "工单表_C区"}
     assert response.data_source == "directory"
-    assert response.meta.primary_table == "工单表"
-    assert {table.name for table in response.meta.tables} == {
-        "工单表",
-        "项目表",
-        "人员表",
-    }
-    assert response.meta.source_row_count == 150
+    assert response.meta.primary_table == "工单表_A区"
+    assert {table.name for table in response.meta.tables} == expected_names
+    assert response.meta.source_row_count == summary["total_work_orders"]
     assert executor.frames is not None
-    assert set(executor.frames) == {"工单表", "项目表", "人员表"}
-    assert len(executor.frames["工单表"]) == 150
-    assert "catalog_profile" in generator.calls[0][1]["content"]
+    assert set(executor.frames) == expected_names
+    for name in expected_names:
+        assert len(executor.frames[name]) == summary["tables"][name]
+        assert "费用金额" in executor.frames[name].columns
+    prompt = generator.calls[0][1]["content"]
+    assert "catalog_profile" in prompt
+    assert "homogeneous_groups" in prompt
+    assert "工单表_A区" in prompt
+
+
+class _ExplodingExtractor:
+    async def extract(self, message: str) -> TimeExtraction:
+        raise TimeRangeParseError("未识别到时间范围，请补充时间")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_agent_defaults_to_full_directory_range_without_time(
+    tmp_path: Path,
+) -> None:
+    """用户只说“汇总所有区域”时，默认使用数据文件覆盖的完整区间。"""
+    summary = generate_mock_tables(tmp_path)
+    settings = _settings(
+        table_directory_enabled=True,
+        data_table_dir=tmp_path,
+    )
+    generator = _FakeGenerator([CONCAT_CODE])
+    executor = _FakeExecutor([_success()])
+    agent = CodeQueryAgent(
+        settings,
+        _ExplodingExtractor(),  # type: ignore[arg-type]
+        _ExplodingFetcher(),  # type: ignore[arg-type]
+        generator,  # type: ignore[arg-type]
+        executor,  # type: ignore[arg-type]
+        table_catalog=TableCatalog(settings),
+    )
+
+    response = asyncio.run(
+        agent.handle(
+            message="汇总所有区域的总工单量和总金额",
+            request_id="code-test-default-range",
+        )
+    )
+
+    assert response.time_range.start_date.isoformat() == "2026-09-01"
+    assert response.time_range.end_date.isoformat() == "2026-09-30"
+    assert response.meta.source_row_count == summary["total_work_orders"]
+    assert any("默认汇总" in warning for warning in response.meta.warnings)
 
 
 def test_agent_repairs_static_validation_error() -> None:

@@ -34,6 +34,8 @@ REQUIRED_WORK_ORDER_COLUMNS: tuple[str, ...] = (
 )
 
 # 允许出现在 API 预览和 Excel 导出中的列。
-PREVIEW_WORK_ORDER_COLUMNS: tuple[str, ...] = tuple(column.value for column in WorkOrderColumn)
+PREVIEW_WORK_ORDER_COLUMNS: tuple[str, ...] = tuple(
+    column.value for column in WorkOrderColumn
+)
 
 COMPLETED_STATUS = "已完成"

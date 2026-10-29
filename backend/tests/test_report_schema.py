@@ -62,7 +62,11 @@ def test_report_frame_maps_raw_columns_to_standard_contract() -> None:
         "工程维修",
         "住宅报修",
     ]
-    assert result[WorkOrderColumn.STATUS.value].tolist() == ["已完成", "处理中", "已取消"]
+    assert result[WorkOrderColumn.STATUS.value].tolist() == [
+        "已完成",
+        "处理中",
+        "已取消",
+    ]
     assert result.loc[0, WorkOrderColumn.AMOUNT.value] == 0.0
     assert result.loc[1, WorkOrderColumn.AMOUNT.value] > 0.0
     assert result.loc[2, WorkOrderColumn.AMOUNT.value] == 0.0

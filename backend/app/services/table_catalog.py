@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from app.adapters.report_schema import add_derived_amount
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class TableDataset:
     columns: tuple[ColumnInfo, ...]
     role: str = "table"
     description: str = ""
+    schema_group: str = ""
     primary_key: tuple[str, ...] = ()
     time_column: str | None = None
     foreign_keys: tuple[ForeignKeyInfo, ...] = ()
@@ -101,6 +103,7 @@ class TableSnapshot:
     primary_table: str | None
     relationships: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...] = ()
+    homogeneous_groups: tuple[dict[str, Any], ...] = ()
 
     @property
     def has_tables(self) -> bool:
@@ -141,6 +144,7 @@ class TableCatalog:
                 primary_table=None,
                 relationships=(),
                 warnings=(),
+                homogeneous_groups=(),
             )
 
         warnings: list[str] = []
@@ -157,6 +161,7 @@ class TableCatalog:
                 primary_table=None,
                 relationships=(),
                 warnings=tuple(warnings),
+                homogeneous_groups=(),
             )
 
         parsed_by_file: dict[str, ParsedTable] = {}
@@ -239,6 +244,7 @@ class TableCatalog:
                     columns=columns,
                     role=role,
                     description=_text(entry.get("description")),
+                    schema_group=_text(entry.get("schema_group")),
                     primary_key=primary_key,
                     time_column=time_column,
                     foreign_keys=foreign_keys,
@@ -247,7 +253,8 @@ class TableCatalog:
                 )
             )
 
-        _attach_possible_join_keys(datasets)
+        homogeneous_groups = _build_homogeneous_groups(datasets)
+        _attach_possible_join_keys(datasets, homogeneous_groups)
         _validate_foreign_keys(datasets, warnings)
         primary_table = _choose_primary_table(datasets, manifest_by_file)
         relationships = _build_relationships(datasets)
@@ -257,6 +264,7 @@ class TableCatalog:
             primary_table=primary_table,
             relationships=relationships,
             warnings=tuple(_dedupe(warnings)),
+            homogeneous_groups=homogeneous_groups,
         )
 
     def _read_cached(self, path: Path) -> ParsedTable:
@@ -348,6 +356,10 @@ def read_table_file(
 
     for column in list(data.columns):
         data[column] = _normalize_series(data[column], str(column))
+
+    # 报表同构文件仍保持 46 列；费用金额只在内存分析表中派生，
+    # 与 RPA 单表链路使用同一套稳定哈希规则。
+    data = add_derived_amount(data)
 
     return ParsedTable(
         frame=data.reset_index(drop=True),
@@ -624,12 +636,57 @@ def _infer_key_candidates(
     return tuple(candidates[:5])
 
 
-def _attach_possible_join_keys(datasets: list[TableDataset]) -> None:
-    """给没有 manifest 关系的表附上“同名列”提示。"""
+def _build_homogeneous_groups(
+    datasets: list[TableDataset],
+) -> tuple[dict[str, Any], ...]:
+    """把列名与顺序完全一致的表归为同构组。
+
+    同构表示“同一业务事实的不同文件”，正确动作是纵向 concat；
+    若把它们当成可 join 的表会按同名业务列产生笛卡尔积。
+    """
+    grouped: dict[tuple[str, ...], list[TableDataset]] = {}
+    for table in datasets:
+        signature = tuple(str(column.name) for column in table.columns)
+        grouped.setdefault(signature, []).append(table)
+
+    groups: list[dict[str, Any]] = []
+    for index, (columns, tables) in enumerate(grouped.items(), start=1):
+        if len(tables) < 2:
+            continue
+        declared = {table.schema_group for table in tables if table.schema_group}
+        name = declared.pop() if len(declared) == 1 else f"同构表组{index}"
+        groups.append(
+            {
+                "name": name,
+                "tables": [table.name for table in tables],
+                "columns": list(columns),
+                "concat_recommended": True,
+            }
+        )
+    return tuple(groups)
+
+
+def _attach_possible_join_keys(
+    datasets: list[TableDataset],
+    homogeneous_groups: tuple[dict[str, Any], ...],
+) -> None:
+    """给非同构表附上“同名列”提示。
+
+    同构表之间不产生 join 提示，避免模型把相同业务列误当外键。
+    """
+    homogeneous_pairs: set[frozenset[str]] = set()
+    for group in homogeneous_groups:
+        names = list(group["tables"])
+        for index, left in enumerate(names):
+            for right in names[index + 1 :]:
+                homogeneous_pairs.add(frozenset((left, right)))
+
     for index, left in enumerate(datasets):
         hints: list[dict[str, Any]] = []
         left_columns = {column.name for column in left.columns}
         for right in datasets[index + 1 :]:
+            if frozenset((left.name, right.name)) in homogeneous_pairs:
+                continue
             common = sorted(left_columns & {column.name for column in right.columns})
             if common:
                 hints.append(

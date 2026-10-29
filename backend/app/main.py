@@ -121,7 +121,9 @@ def create_app(
     @app.middleware("http")
     async def attach_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
         candidate = request.headers.get("X-Request-Id", "").strip()
-        request_id = candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
+        request_id = (
+            candidate if candidate and len(candidate) <= 128 else str(uuid.uuid4())
+        )
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-Id"] = request_id

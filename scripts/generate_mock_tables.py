@@ -32,7 +32,7 @@ def main() -> int:
 
     summary = generate_mock_tables(args.output)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print("\n外键完整性校验通过：工单 -> 项目/人员 100% 覆盖。")
+    print("\n已生成 3 个同构工单表：表头完全一致，分析时使用 pd.concat 纵向合并。")
     return 0
 
 

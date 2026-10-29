@@ -166,7 +166,9 @@ def normalize_report_frame(
     生成可复现的模拟费用，并把满意度档位映射为 1~5 分。这样既保留原始
     导出结构，又能让上层看板继续计算经营指标。
     """
-    missing = [column for column in REQUIRED_REPORT_COLUMNS if column not in frame.columns]
+    missing = [
+        column for column in REQUIRED_REPORT_COLUMNS if column not in frame.columns
+    ]
     if missing:
         raise DataContractError(details={"missing_columns": missing})
 
@@ -186,7 +188,9 @@ def normalize_report_frame(
     result[WorkOrderColumn.OWNER.value] = _derive_owner(source)
 
     satisfaction = _clean_text(source, "满意度").map(SATISFACTION_MAPPING)
-    result[WorkOrderColumn.SATISFACTION.value] = pd.to_numeric(satisfaction, errors="coerce")
+    result[WorkOrderColumn.SATISFACTION.value] = pd.to_numeric(
+        satisfaction, errors="coerce"
+    )
 
     # 费用只对已处理/处理中的维修类工单产生，取消工单归零。
     result[WorkOrderColumn.AMOUNT.value] = _derive_amount(
@@ -217,6 +221,27 @@ def normalize_report_frame(
     return result.sort_values(WorkOrderColumn.RECEIVED_AT.value).reset_index(drop=True)
 
 
+def add_derived_amount(frame: pd.DataFrame) -> pd.DataFrame:
+    """给报表结构的 DataFrame 补充派生「费用金额」列。
+
+    真实报表没有费用列，但经营分析需要总金额。这里复用 RPA 链路的稳定
+    哈希规则，按单号生成可复现金额。源 Excel 文件仍保持 46 列不变，
+    派生列只存在于内存中的分析表里。
+    """
+    if "费用金额" in frame.columns or not looks_like_report_frame(frame):
+        return frame
+
+    result = frame.copy()
+    repair_types = _derive_repair_type(result)
+    statuses = _derive_status(result)
+    result["费用金额"] = _derive_amount(
+        ticket_ids=_clean_text(result, "单号"),
+        repair_types=repair_types,
+        statuses=statuses,
+    )
+    return result
+
+
 def _clean_text(frame: pd.DataFrame, column: str) -> pd.Series:
     """读取文本列并去除首尾空白；缺失列返回全空字符串。"""
     if column not in frame.columns:
@@ -231,7 +256,9 @@ def _derive_repair_type(frame: pd.DataFrame) -> pd.Series:
     安防告警、工程维修、住宅报修、客户服务、其他服务。
     """
     ticket_type = _clean_text(frame, "工单类型")
-    service_path = _clean_text(frame, "工单服务项目") + " " + _clean_text(frame, "服务内容")
+    service_path = (
+        _clean_text(frame, "工单服务项目") + " " + _clean_text(frame, "服务内容")
+    )
 
     repair_type = pd.Series("其他服务", index=frame.index, dtype="string")
     repair_type.loc[ticket_type.eq("数智中枢告警工单")] = "安防告警"
@@ -239,9 +266,9 @@ def _derive_repair_type(frame: pd.DataFrame) -> pd.Series:
     repair_type.loc[ticket_type.isin(["客户报事报修", "客户投诉建议"])] = "客户服务"
 
     # 普通提交工单和补单中，只有明确勾选工程维修的才归入工程维修。
-    engineering_mask = ticket_type.isin(["提交工单", "补单"]) & service_path.str.contains(
-        "工程维修", na=False
-    )
+    engineering_mask = ticket_type.isin(
+        ["提交工单", "补单"]
+    ) & service_path.str.contains("工程维修", na=False)
     repair_type.loc[engineering_mask] = "工程维修"
     return repair_type.fillna("其他服务")
 

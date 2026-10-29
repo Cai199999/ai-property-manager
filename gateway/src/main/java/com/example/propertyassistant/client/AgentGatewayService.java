@@ -26,6 +26,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -42,16 +44,6 @@ public class AgentGatewayService {
     private static final MediaType XLSX_MEDIA_TYPE = MediaType.parseMediaType(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
-    /**
-     * 转发给 Python 的 multipart 文件段统一使用 ASCII 文件名。
-     *
-     * Spring 的 ContentDisposition 只要携带 charset 就会把 filename 写成
-     * RFC 2047 encoded-word（=?UTF-8?Q?...?=），Python 的 multipart 解析器
-     * 取到的是未解码的字符串，导致 ".xlsx" 后缀校验失败。原始文件名改为
-     * 独立表单字段 filename 传递，既兼容中文又避免头部编码歧义。
-     */
-    private static final String SAFE_PART_FILENAME = "upload.xlsx";
-
     private final RestClient restClient;
     private final GatewayProperties properties;
     private final ObjectMapper objectMapper;
@@ -95,28 +87,58 @@ public class AgentGatewayService {
         }
     }
 
-    public JsonNode uploadTable(MultipartFile file, String requestId) {
-        String filename = validateUpload(file);
+    public JsonNode uploadTables(List<MultipartFile> files, String requestId) {
+        if (files == null || files.isEmpty()) {
+            throw new InvalidUploadException("请选择至少一个 .xlsx 文件");
+        }
+        if (files.size() > properties.uploadMaxFiles()) {
+            throw new InvalidUploadException(
+                    "单次最多上传 " + properties.uploadMaxFiles() + " 个文件"
+            );
+        }
+
+        List<String> filenames = new ArrayList<>(files.size());
+        long totalBytes = 0;
+        for (MultipartFile file : files) {
+            filenames.add(validateUpload(file));
+            totalBytes += file.getSize();
+        }
+        if (totalBytes > properties.uploadMaxBytes()) {
+            throw new UploadTooLargeException(
+                    "上传文件总大小超过 "
+                            + properties.uploadMaxBytes() / 1_000_000
+                            + " MB 限制"
+            );
+        }
 
         // 手动组装 multipart，避免 MultipartBodyBuilder 引入 Reactor 的
         // Publisher 类型，保持网关只依赖 Spring MVC + Jackson。
-        // 文件段只带 ASCII 文件名，原始中文名通过 filename 字段透传。
+        // 文件段只带 ASCII 文件名：ContentDisposition 带 charset 时会写成
+        // RFC 2047 encoded-word，Python 解析后无法匹配 .xlsx 后缀。
+        // 原始中文名改为独立 filename 字段，按上传顺序重复传递。
         HttpHeaders partHeaders = new HttpHeaders();
         partHeaders.setContentType(XLSX_MEDIA_TYPE);
-        partHeaders.setContentDisposition(
-                ContentDisposition.formData()
-                        .name("file")
-                        .filename(SAFE_PART_FILENAME)
-                        .build()
-        );
         HttpHeaders filenameHeaders = new HttpHeaders();
         filenameHeaders.setContentDisposition(
                 ContentDisposition.formData().name("filename").build()
         );
 
         MultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
-        parts.add("file", new HttpEntity<>(file.getResource(), partHeaders));
-        parts.add("filename", new HttpEntity<>(filename, filenameHeaders));
+        for (int index = 0; index < files.size(); index++) {
+            String safeName = "upload_" + (index + 1) + ".xlsx";
+            HttpHeaders headers = new HttpHeaders();
+            headers.putAll(partHeaders);
+            headers.setContentDisposition(
+                    ContentDisposition.formData()
+                            .name("file")
+                            .filename(safeName)
+                            .build()
+            );
+            parts.add("file", new HttpEntity<>(files.get(index).getResource(), headers));
+        }
+        for (String filename : filenames) {
+            parts.add("filename", new HttpEntity<>(filename, filenameHeaders));
+        }
 
         try {
             return restClient.post()

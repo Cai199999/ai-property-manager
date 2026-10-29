@@ -125,35 +125,73 @@ async def list_tables(request: Request) -> TableCatalogResponse:
 )
 async def upload_table(
     request: Request,
-    file: UploadFile = File(..., description="仅支持 .xlsx 文件"),
-    filename: str | None = Form(
+    file: list[UploadFile] = File(
+        ...,
+        description="一个或多个 .xlsx 文件，可重复提交 file 字段",
+    ),
+    filename: list[str] | None = Form(
         default=None,
-        description="原始文件名；网关用独立字段透传中文名",
+        description="与 file 顺序对应的原始文件名；网关用于透传中文名",
     ),
 ) -> TableUploadResponse:
     service = getattr(request.app.state, "table_import_service", None)
     if service is None or not service.enabled:
         raise TableImportUnavailableError()
 
-    # 网关会把原始文件名放在独立字段中，避免 multipart 头部的编码差异；
-    # 直接调用本接口（curl/Swagger）时仍回退到文件段自带的 filename。
-    original_name = (filename or file.filename or "").strip()
-    if len(original_name) > 255:
-        raise TableImportError("文件名过长")
+    uploads = [item for item in file if item is not None]
+    if not uploads:
+        raise TableImportError("请选择至少一个 .xlsx 文件")
 
-    max_bytes = request.app.state.settings.table_upload_max_bytes
-    content = await _read_upload(file, max_bytes=max_bytes)
-    dataset, snapshot = await anyio.to_thread.run_sync(
-        partial(
-            service.import_bytes,
-            filename=original_name,
-            content=content,
-        )
-    )
+    settings = request.app.state.settings
+    if len(uploads) > settings.table_upload_max_files:
+        raise TableImportError(f"单次最多导入 {settings.table_upload_max_files} 个文件")
+
+    provided_names = [name.strip() for name in (filename or []) if name.strip()]
+    max_bytes = settings.table_upload_max_bytes
+    imported: list[TableDataset] = []
+    failures: list[str] = []
+    snapshot: TableSnapshot | None = None
+
+    for index, upload in enumerate(uploads):
+        # 网关会把原始文件名放在独立字段中，避免 multipart 头部的编码差异；
+        # 直接调用本接口（curl/Swagger）时仍回退到文件段自带的 filename。
+        original_name = (
+            provided_names[index]
+            if index < len(provided_names)
+            else (upload.filename or "")
+        ).strip()
+        display_name = original_name or f"第 {index + 1} 个文件"
+        if len(original_name) > 255:
+            await upload.close()
+            failures.append(f"{display_name[:40]}…: 文件名过长")
+            continue
+
+        try:
+            content = await _read_upload(upload, max_bytes=max_bytes)
+            dataset, snapshot = await anyio.to_thread.run_sync(
+                partial(
+                    service.import_bytes,
+                    filename=original_name,
+                    content=content,
+                )
+            )
+        except TableImportError as exc:
+            failures.append(f"{display_name}: {exc.message}")
+            continue
+        imported.append(dataset)
+
+    if not imported or snapshot is None:
+        message = failures[0] if failures else "文件导入失败"
+        raise TableImportError(message, details={"failures": failures})
+
+    imported_infos = [_table_info(dataset) for dataset in imported]
     catalog_response = _catalog_response(snapshot)
     return TableUploadResponse(
-        imported=_table_info(dataset),
-        **catalog_response.model_dump(),
+        imported=imported_infos[0],
+        imported_tables=imported_infos,
+        tables=catalog_response.tables,
+        primary_table=catalog_response.primary_table,
+        warnings=list(catalog_response.warnings) + failures,
     )
 
 
@@ -188,6 +226,7 @@ def _table_info(dataset: TableDataset) -> TableInfo:
         name=dataset.name,
         role=dataset.role,
         description=dataset.description,
+        schema_group=dataset.schema_group,
         file_name=dataset.file_name,
         sheet_name=dataset.sheet_name,
         row_count=dataset.row_count,

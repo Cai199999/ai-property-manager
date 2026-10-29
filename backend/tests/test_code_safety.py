@@ -81,7 +81,9 @@ result_df = (
 
 
 def test_sanitize_error_text_hides_absolute_paths() -> None:
-    result = sanitize_error_text("FileNotFoundError: /home/admin1/private/data.csv\n密钥 sk-test")
+    result = sanitize_error_text(
+        "FileNotFoundError: /home/admin1/private/data.csv\n密钥 sk-test"
+    )
 
     assert "/home/admin1/private/data.csv" not in result
     assert "<path>" in result

@@ -19,6 +19,7 @@ class TableInfo(BaseModel):
     name: str
     role: str
     description: str = ""
+    schema_group: str = ""
     file_name: str
     sheet_name: str
     row_count: int
@@ -39,4 +40,5 @@ class TableCatalogResponse(BaseModel):
 class TableUploadResponse(TableCatalogResponse):
     """上传成功后的结果：新表 + 刷新后的目录。"""
 
-    imported: TableInfo
+    imported: TableInfo | None = None
+    imported_tables: list[TableInfo] = Field(default_factory=list)
