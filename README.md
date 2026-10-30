@@ -45,11 +45,10 @@ ai-property-manager/
 │   ├── .env                 # 本机配置（不提交）
 │   └── .env.example
 ├── gateway/                 # Spring Boot 3.5 / Java 21
-│   └── src/
-├── frontend/                # 原生 HTML/CSS/JS + 本地 ECharts
-│   ├── data/                # 由 API 响应生成的数据快照
-│   ├── vendor/              # 本地 ECharts（离线可用）
-│   └── index.html           # 工单月报看板
+│   └── src/main/resources/static/  # 前端由网关直接托管（同源，无需单独服务）
+│       ├── data/            # 由 API 响应生成的数据快照
+│       ├── vendor/          # 本地 ECharts（离线可用）
+│       └── index.html       # 工单月报看板
 ├── scripts/
 └── .venv/                   # 使用 --system-site-packages 创建
 ```
@@ -75,7 +74,7 @@ QWEN_API_KEY=
 ### 2. 启动 Python Agent
 
 ```bash
-cd /home/admin1/Workspace/ai-property-manager
+cd <项目根目录>
 ./scripts/start-backend.sh
 ```
 
@@ -87,7 +86,7 @@ cd /home/admin1/Workspace/ai-property-manager
 另开终端：
 
 ```bash
-cd /home/admin1/Workspace/ai-property-manager
+cd <项目根目录>
 ./scripts/start-gateway.sh
 ```
 
@@ -95,12 +94,11 @@ cd /home/admin1/Workspace/ai-property-manager
 
 ### 4. 打开可视化看板
 
-```bash
-cd /home/admin1/Workspace/ai-property-manager
-./scripts/start-frontend.sh
-```
+前端静态资源已打包进网关（`gateway/src/main/resources/static/`），网关启动后直接访问：
 
-访问 http://127.0.0.1:8081/
+**http://127.0.0.1:8080/**
+
+页面接口全部使用同源相对路径（`/api/v1/assistant/...`），无需再单独启动 8081 静态服务器，也不依赖任何写死的主机端口。
 
 页面提供三种操作：
 
@@ -466,7 +464,7 @@ PROPERTY_API_KEY=...
 ## 测试
 
 ```bash
-cd /home/admin1/Workspace/ai-property-manager
+cd <项目根目录>
 ./scripts/test-all.sh
 ```
 

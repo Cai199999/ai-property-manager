@@ -11,12 +11,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 应用根目录（backend/）。所有相对路径都以它为基准，而不是进程工作目录：
+# Windows 绿色版双击启动时 CWD 通常是启动器所在目录甚至是 System32，
+# 依赖 CWD 会让数据目录、日志和 .env 全部漂移。
+APP_HOME = Path(__file__).resolve().parents[1]
+
+
+def _anchor_to_app_home(value: Path) -> Path:
+    """把相对路径解析到 backend/ 下，绝对路径保持原样。"""
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else (APP_HOME / path)
+
 
 class Settings(BaseSettings):
     """AI 物管助手运行配置。"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # 显式指定绝对路径：无论从哪个目录启动都能读到同一份 .env。
+        env_file=str(APP_HOME / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -139,6 +151,17 @@ class Settings(BaseSettings):
         if normalized not in {"deepseek", "doubao", "qwen"}:
             raise ValueError("default_llm_provider 只支持 deepseek / doubao / qwen")
         return normalized
+
+    @field_validator(
+        "rpa_download_dir",
+        "data_table_dir",
+        "report_export_dir",
+        mode="after",
+    )
+    @classmethod
+    def anchor_paths(cls, value: Path) -> Path:
+        """相对路径统一挂到 backend/ 下，消除对进程工作目录的依赖。"""
+        return _anchor_to_app_home(value)
 
     @property
     def deepseek_key(self) -> str:

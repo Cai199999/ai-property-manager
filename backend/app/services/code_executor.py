@@ -60,9 +60,12 @@ class CodeExecutor:
         self._settings = settings
         self._bwrap = shutil.which("bwrap")
         self._venv_root = Path(sys.prefix).resolve()
+        # venv 解释器位置随平台不同：POSIX 为 bin/，Windows 为 Scripts/。
         python_candidates = (
             self._venv_root / "bin" / "python",
             self._venv_root / "bin" / "python3",
+            self._venv_root / "Scripts" / "python.exe",
+            self._venv_root / "Scripts" / "python3.exe",
         )
         self._python = next(
             (candidate for candidate in python_candidates if candidate.exists()),

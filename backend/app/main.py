@@ -1,8 +1,12 @@
 """FastAPI 应用入口。
 
-本地运行：
+本地运行（Linux / macOS）：
     cd backend
-    .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    ../.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+Windows：
+    cd backend
+    ..\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations

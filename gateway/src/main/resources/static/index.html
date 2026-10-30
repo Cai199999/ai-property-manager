@@ -1566,8 +1566,10 @@
       const downloadButton = document.getElementById("downloadButton");
       const wordDownloadButton = document.getElementById("wordDownloadButton");
       // 所有浏览器请求只发往 Java 网关，Python 8000 仅对 Java 可见。
-      const gatewayOrigin = "http://127.0.0.1:8080";
-      const apiBase = `${gatewayOrigin}/api/v1/assistant`;
+      // 页面由 Java 网关（8080）直接托管，接口统一走同源相对路径，
+      // 避免写死主机端口后在不同部署环境失效（Windows 绿色版同样适用）。
+      const appOrigin = window.location.origin;
+      const apiBase = "/api/v1/assistant";
       const codeQueryEndpoint = `${apiBase}/query/code`;
       const tablePreviewEndpoint = `${apiBase}/tables/preview`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
@@ -1954,8 +1956,8 @@
           return null;
         }
         try {
-          const url = new URL(value, gatewayOrigin);
-          if (url.origin !== gatewayOrigin) {
+          const url = new URL(value, appOrigin);
+          if (url.origin !== appOrigin) {
             return null;
           }
           const pattern = new RegExp(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import tempfile
 import threading
 import uuid
@@ -556,10 +557,34 @@ def _pick_installed_font() -> str | None:
     return next((name for name in _CJK_FONT_CANDIDATES if name in names), None)
 
 
+def _cjk_font_directories() -> tuple[Path, ...]:
+    """返回跨平台的中文字体目录：Linux 系统字体、用户字体与 Windows 字体。"""
+    windows_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    local_appdata = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+    return (
+        Path("/usr/share/fonts"),
+        Path.home() / ".local/share/fonts",
+        windows_dir,
+        local_appdata / "Microsoft" / "Windows" / "Fonts",
+    )
+
+
 def _iter_cjk_font_files() -> Iterator[Path]:
     """扫描常见字体目录，兼容 matplotlib 未解析 TTC 子字体的环境。"""
-    patterns = ("*CJK*.ttc", "*CJK*.otf", "*SC*.otf", "*Hei*.ttf", "*Song*.ttf", "wqy*")
-    for directory in (Path("/usr/share/fonts"), Path.home() / ".local/share/fonts"):
+    patterns = (
+        "*CJK*.ttc",
+        "*CJK*.otf",
+        "*SC*.otf",
+        "*Hei*.ttf",
+        "*Song*.ttf",
+        "wqy*",
+        # Windows 自带中文字体：微软雅黑、黑体、宋体、等线。
+        "msyh*.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "Deng*.ttf",
+    )
+    for directory in _cjk_font_directories():
         if not directory.is_dir():
             continue
         for pattern in patterns:
