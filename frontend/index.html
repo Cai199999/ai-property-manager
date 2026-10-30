@@ -1466,6 +1466,7 @@
       const codeQueryEndpoint = `${apiBase}/query/code`;
       const tablePreviewEndpoint = `${apiBase}/tables/preview`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
+      const tablesEndpoint = `${apiBase}/tables`;
       const previewPageSize = 50;
       const maxUploadBytes = 20 * 1024 * 1024;
       // 与网关 gateway.agent.upload-max-files、后端 TABLE_UPLOAD_MAX_FILES 保持一致。
@@ -2051,6 +2052,53 @@
         renderTableCatalog();
       };
 
+      // 删表等目录写操作后，以服务端当前目录为准重新渲染“当前数据表”。
+      const refreshTableCatalog = async () => {
+        const response = await fetch(tablesEndpoint, {
+          headers: { Accept: "application/json" }
+        });
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        if (!response.ok) {
+          throw new Error(
+            payload?.error?.message || `刷新数据表失败（HTTP ${response.status}）`
+          );
+        }
+        uploadedTables.clear();
+        rememberUploadedTables(payload?.tables);
+      };
+
+      const handleActionResult = async (payload) => {
+        const message = typeof payload?.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : "操作已完成";
+        if (payload?.success === false) {
+          showToast(message, "error");
+          showQueryError(message);
+          return;
+        }
+
+        // 工具调用结果不渲染图表或结果表，只提示并刷新左栏数据表。
+        showToast("删除成功", "success");
+        dynamicPayload = null;
+        if (dynamicChart) {
+          dynamicChart.clear();
+        }
+        dynamicChartElement.hidden = true;
+        renderQueryWarnings([]);
+        showEmptyState(message);
+        showQueryStatus(message, "success");
+        try {
+          await refreshTableCatalog();
+        } catch {
+          showToast("数据表列表刷新失败，请手动刷新页面", "error");
+        }
+      };
+
       const showPreviewStatus = (message, kind) => {
         tablePreviewStatus.textContent = message;
         tablePreviewStatus.classList.toggle("is-error", kind === "error");
@@ -2385,6 +2433,10 @@
           }
           if (!response.ok) {
             throw new Error(httpErrorMessage(response.status, payload));
+          }
+          if (payload?.type === "action_result") {
+            await handleActionResult(payload);
+            return;
           }
           renderDynamicPayload(payload);
           const rowCount = Number(payload.result?.row_count ?? payload.result?.rows?.length ?? 0);

@@ -150,6 +150,14 @@ class TableNotFoundError(AppError):
     message = "数据表不存在，请刷新当前数据表清单"
 
 
+class TableDeletionError(AppError):
+    """删除数据表文件或同步元数据时失败。"""
+
+    code = "TABLE_DELETE_FAILED"
+    status_code = 422
+    message = "删除数据表失败，请稍后重试"
+
+
 class TablePreviewUnavailableError(AppError):
     """多表目录未启用，无法提供预览。"""
 

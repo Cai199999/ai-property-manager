@@ -18,10 +18,14 @@ from app.core.exceptions import (
     CodeGenerationError,
     CodeExecutionTimeoutError,
     CodeSandboxUnavailableError,
+    TableDeletionError,
+    TableImportUnavailableError,
+    TableNotFoundError,
     TimeRangeParseError,
 )
 from app.schemas.assistant import ParserInfo, TimeRange
 from app.schemas.code_query import (
+    ActionResultResponse,
     ChartMeta,
     CodeExecutionInfo,
     CodeQueryMeta,
@@ -59,6 +63,13 @@ from app.services.deepseek_extractor import LLMTimeRangeExtractor
 from app.services.llm_provider import LLMProviderFactory, ResolvedProvider
 from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
+from app.services.table_delete_intent import (
+    DeleteTableIntent,
+    DeleteTableIssue,
+    detect_delete_intent,
+    looks_like_table_delete,
+)
+from app.services.table_deletion import TableDeletionService
 from app.services.time_range import TimeExtraction
 from app.services.word_exporter import (
     LLMReportSummarizer,
@@ -117,6 +128,74 @@ class CodeQueryAgent:
         self._report_exporter = report_exporter
         self._word_exporter = word_exporter
         self._report_summarizer = report_summarizer
+        self._table_deletion = (
+            TableDeletionService(settings, self._table_catalog)
+            if self._table_catalog is not None
+            else None
+        )
+
+    async def _try_delete_table(
+        self,
+        message: str,
+        request_id: str,
+    ) -> ActionResultResponse | None:
+        """识别并执行删表意图；非删表请求返回 None 继续原流程。"""
+        if self._table_catalog is None or self._table_deletion is None:
+            return None
+        if not looks_like_table_delete(message):
+            return None
+
+        try:
+            snapshot = await anyio.to_thread.run_sync(self._table_catalog.scan)
+        except Exception as exc:  # noqa: BLE001 - 扫描失败时交回原查询流程
+            logger.warning("删表意图识别时扫描目录失败: %s", type(exc).__name__)
+            return None
+
+        current_names = [table.name for table in snapshot.tables]
+        intent = detect_delete_intent(message, current_names)
+        if intent is None:
+            return None
+
+        if isinstance(intent, DeleteTableIssue):
+            return ActionResultResponse(
+                request_id=request_id,
+                success=False,
+                message=intent.message,
+                remaining_tables=current_names,
+                candidates=list(intent.candidates),
+            )
+
+        assert isinstance(intent, DeleteTableIntent)
+        try:
+            result = await anyio.to_thread.run_sync(
+                partial(self._table_deletion.delete_table, intent.table_name)
+            )
+        except (TableNotFoundError, TableDeletionError, TableImportUnavailableError) as exc:
+            logger.info(
+                "删表失败 request_id=%s table=%s error=%s",
+                request_id,
+                intent.table_name,
+                exc.code,
+            )
+            return ActionResultResponse(
+                request_id=request_id,
+                success=False,
+                message=exc.message,
+                remaining_tables=current_names,
+            )
+
+        logger.info(
+            "删表成功 request_id=%s table=%s",
+            request_id,
+            result.deleted_table,
+        )
+        return ActionResultResponse(
+            request_id=request_id,
+            success=True,
+            message=f"已成功删除数据表：{result.deleted_table}",
+            deleted_table=result.deleted_table,
+            remaining_tables=list(result.remaining_tables),
+        )
 
     async def handle(
         self,
@@ -127,7 +206,13 @@ class CodeQueryAgent:
         provider_type: str | None = None,
         user_api_key: str | SecretStr | None = None,
         model_name: str | None = None,
-    ) -> CodeQueryResponse:
+    ) -> CodeQueryResponse | ActionResultResponse:
+        # 删除表是确定性工具调用：先于大模型与沙箱判断，避免用户输入
+        # “删除工单表_A区”时被送去生成 Pandas 代码。
+        action = await self._try_delete_table(message, request_id)
+        if action is not None:
+            return action
+
         if not self._settings.code_query_enabled:
             raise CodeGenerationError(
                 "生成式代码查询未启用",

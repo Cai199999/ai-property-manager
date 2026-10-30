@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
-import threading
 import uuid
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -30,6 +31,15 @@ _XLSX_SUFFIX = ".xlsx"
 _MAX_ZIP_ENTRIES = 1_000
 
 
+@dataclass(frozen=True, slots=True)
+class TableImportResult:
+    """一次导入的结果；重复内容会复用已有表并附带 warning。"""
+
+    dataset: TableDataset
+    snapshot: TableSnapshot
+    warnings: tuple[str, ...] = ()
+
+
 class TableImportService:
     """把上传文件变成目录中的一张可查询表。"""
 
@@ -37,7 +47,6 @@ class TableImportService:
         self._settings = settings
         self._catalog = catalog
         self._directory = Path(settings.data_table_dir)
-        self._lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -48,8 +57,12 @@ class TableImportService:
         *,
         filename: str,
         content: bytes,
-    ) -> tuple[TableDataset, TableSnapshot]:
-        """导入一个 xlsx 文件并返回新表与刷新后的目录快照。"""
+    ) -> TableImportResult:
+        """导入一个 xlsx 文件并返回新表与刷新后的目录快照。
+
+        内容 MD5 与目录中已有表一致时，不落盘、不写索引，直接复用已有表，
+        并在 warnings 中说明去重原因。
+        """
         if not self.enabled or self._catalog is None:
             raise TableImportUnavailableError()
 
@@ -90,7 +103,6 @@ class TableImportService:
             )
             if parsed.frame.empty:
                 raise TableImportError("文件中没有可导入的数据行")
-            temporary.replace(target)
         except TableImportError:
             temporary.unlink(missing_ok=True)
             raise
@@ -99,26 +111,97 @@ class TableImportService:
             logger.warning("上传文件解析失败: %s", type(exc).__name__)
             raise TableImportError("无法解析 Excel，请确认文件未损坏") from exc
 
-        with self._lock:
-            self._update_upload_index(
-                stored_name=stored_name,
-                original_stem=safe_stem,
-                parsed=parsed,
-                size=len(content),
-            )
+        digest = hashlib.md5(content).hexdigest()
+
+        with self._catalog.operation_lock:
+            # 先检查内容是否已存在，避免把重复文件写入目录后再靠扫描剔除。
+            snapshot = self._catalog.scan()
+            duplicate = self._find_duplicate_table(snapshot, digest)
+            if duplicate is not None:
+                temporary.unlink(missing_ok=True)
+                logger.info(
+                    "上传内容与已有表重复，已复用 table=%s",
+                    duplicate.name,
+                )
+                return TableImportResult(
+                    dataset=duplicate,
+                    snapshot=snapshot,
+                    warnings=(self._duplicate_warning(duplicate.name),),
+                )
+
+            try:
+                temporary.replace(target)
+                self._update_upload_index(
+                    stored_name=stored_name,
+                    original_stem=safe_stem,
+                    parsed=parsed,
+                    size=len(content),
+                )
+            except OSError as exc:
+                temporary.unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
+                logger.warning("上传文件保存失败: %s", type(exc).__name__)
+                raise TableImportError("文件保存失败，请重试") from exc
+
             self._catalog.invalidate()
             snapshot = self._catalog.scan()
+            dataset = next(
+                (table for table in snapshot.tables if table.path.resolve() == target.resolve()),
+                None,
+            )
+            if dataset is None:
+                # 兜底：并发或极端情况下仍被去重时，按内容找回已有表，
+                # 不留下重复文件和无效索引记录。
+                duplicate = self._find_duplicate_table(snapshot, digest)
+                try:
+                    self._remove_upload_index_entry(stored_name)
+                except OSError:
+                    logger.warning("清理重复上传的索引记录失败 stored_name=%s", stored_name)
+                target.unlink(missing_ok=True)
+                self._catalog.invalidate()
+                if duplicate is not None:
+                    refreshed = self._catalog.scan()
+                    reused = self._table_by_name(refreshed, duplicate.name) or duplicate
+                    logger.info(
+                        "上传内容与已有表重复，已复用 table=%s",
+                        reused.name,
+                    )
+                    return TableImportResult(
+                        dataset=reused,
+                        snapshot=refreshed,
+                        warnings=(self._duplicate_warning(reused.name),),
+                    )
+                raise TableImportError("文件保存失败，请重试")
 
-        dataset = next(
-            (table for table in snapshot.tables if table.path.resolve() == target.resolve()),
-            None,
-        )
-        if dataset is None:
-            # 极端情况下文件被并发删除；不要把半成品留给调用方。
-            target.unlink(missing_ok=True)
-            raise TableImportError("文件已保存但未能加入数据表目录，请重试")
+        return TableImportResult(dataset=dataset, snapshot=snapshot)
 
-        return dataset, snapshot
+    def _find_duplicate_table(
+        self,
+        snapshot: TableSnapshot,
+        digest: str,
+    ) -> TableDataset | None:
+        """在已扫描出的表中查找内容 MD5 相同的表。"""
+        if self._catalog is None:
+            return None
+        for table in snapshot.tables:
+            try:
+                if self._catalog.file_digest(table.path) == digest:
+                    return table
+            except OSError:
+                # 单个文件读取失败不应阻断上传流程。
+                continue
+        return None
+
+    @staticmethod
+    def _duplicate_warning(table_name: str) -> str:
+        return f"上传成功，但检测到内容与已有表【{table_name}】完全一致，" "已自动复用去重"
+
+    @staticmethod
+    def _table_by_name(
+        snapshot: TableSnapshot,
+        table_name: str,
+    ) -> TableDataset | None:
+        return snapshot.table_map().get(table_name)
 
     def _update_upload_index(
         self,
@@ -129,15 +212,7 @@ class TableImportService:
         size: int,
     ) -> None:
         index_path = self._directory / UPLOAD_INDEX_NAME
-        payload: dict[str, Any] = {}
-        if index_path.is_file():
-            try:
-                existing = json.loads(index_path.read_text(encoding="utf-8"))
-                if isinstance(existing, dict):
-                    payload = existing
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                logger.warning("upload_index.json 损坏，将重建")
-
+        payload = self._read_upload_index(index_path)
         payload[stored_name] = {
             "original_stem": original_stem,
             "uploaded_at": datetime.now(self._settings.tz).isoformat(),
@@ -146,12 +221,41 @@ class TableImportService:
             "row_count": int(len(parsed.frame)),
             "column_count": int(len(parsed.frame.columns)),
         }
+        self._write_upload_index(index_path, payload)
+
+    def _remove_upload_index_entry(self, stored_name: str) -> None:
+        index_path = self._directory / UPLOAD_INDEX_NAME
+        if not index_path.is_file():
+            return
+        payload = self._read_upload_index(index_path)
+        if payload.pop(stored_name, None) is None:
+            return
+        self._write_upload_index(index_path, payload)
+
+    @staticmethod
+    def _read_upload_index(index_path: Path) -> dict[str, Any]:
+        if not index_path.is_file():
+            return {}
+        try:
+            existing = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                return existing
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            logger.warning("upload_index.json 损坏，将重建")
+        return {}
+
+    @staticmethod
+    def _write_upload_index(index_path: Path, payload: dict[str, Any]) -> None:
         temporary = index_path.parent / f"{index_path.name}.part"
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(index_path)
+        try:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(index_path)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+            raise
 
 
 def _validate_xlsx_archive(content: bytes, *, max_uncompressed: int) -> None:

@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,15 +129,26 @@ class TableCatalog:
         self._cache: dict[Path, _CachedTable] = {}
         # 文件内容哈希缓存：key 为绝对路径，value 为 (mtime_ns, size) -> md5。
         self._hash_cache: dict[Path, tuple[tuple[int, int], str]] = {}
+        # 导入与删除都会改写目录及索引，必须串行执行。
+        self._operation_lock = threading.RLock()
 
     @property
     def directory(self) -> Path:
         return self._directory
 
+    @property
+    def operation_lock(self) -> threading.RLock:
+        """目录写操作的共享锁，避免导入与删除交错。"""
+        return self._operation_lock
+
     def invalidate(self) -> None:
         """上传或删除文件后立即失效缓存。"""
         self._cache.clear()
         self._hash_cache.clear()
+
+    def file_digest(self, path: Path) -> str:
+        """返回文件 MD5（按 mtime+size 缓存），供导入去重与删除校验复用。"""
+        return self._md5_cached(path)
 
     def scan(self) -> TableSnapshot:
         """扫描目录并返回当前所有表的元数据与 DataFrame。"""

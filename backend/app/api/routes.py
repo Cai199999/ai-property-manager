@@ -18,7 +18,7 @@ from app.core.exceptions import (
     TablePreviewUnavailableError,
 )
 from app.schemas.assistant import AssistantQueryRequest, AssistantQueryResponse
-from app.schemas.code_query import CodeQueryRequest, CodeQueryResponse
+from app.schemas.code_query import ActionResultResponse, CodeQueryRequest, CodeQueryResponse
 from app.schemas.tables import (
     TableCatalogResponse,
     TableColumnInfo,
@@ -59,13 +59,13 @@ async def query_assistant(
 
 @router.post(
     "/query/code",
-    response_model=CodeQueryResponse,
+    response_model=CodeQueryResponse | ActionResultResponse,
     summary="自然语言生成 Pandas 代码并返回通用结果表",
 )
 async def query_with_generated_code(
     payload: CodeQueryRequest,
     request: Request,
-) -> CodeQueryResponse:
+) -> CodeQueryResponse | ActionResultResponse:
     return await request.app.state.code_query_agent.handle(
         message=payload.message,
         request_id=get_request_id(request),
@@ -181,6 +181,7 @@ async def upload_table(
     max_bytes = settings.table_upload_max_bytes
     imported: list[TableDataset] = []
     failures: list[str] = []
+    import_warnings: list[str] = []
     snapshot: TableSnapshot | None = None
 
     for index, upload in enumerate(uploads):
@@ -197,7 +198,7 @@ async def upload_table(
 
         try:
             content = await _read_upload(upload, max_bytes=max_bytes)
-            dataset, snapshot = await anyio.to_thread.run_sync(
+            result = await anyio.to_thread.run_sync(
                 partial(
                     service.import_bytes,
                     filename=original_name,
@@ -207,7 +208,9 @@ async def upload_table(
         except TableImportError as exc:
             failures.append(f"{display_name}: {exc.message}")
             continue
-        imported.append(dataset)
+        imported.append(result.dataset)
+        snapshot = result.snapshot
+        import_warnings.extend(result.warnings)
 
     if not imported or snapshot is None:
         message = failures[0] if failures else "文件导入失败"
@@ -220,7 +223,7 @@ async def upload_table(
         imported_tables=imported_infos,
         tables=catalog_response.tables,
         primary_table=catalog_response.primary_table,
-        warnings=list(catalog_response.warnings) + failures,
+        warnings=list(catalog_response.warnings) + import_warnings + failures,
     )
 
 

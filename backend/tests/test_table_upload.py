@@ -64,6 +64,33 @@ def test_upload_adds_table_and_returns_catalog(tmp_path: Path) -> None:
     assert list((tmp_path / "tables").glob("upload_*.xlsx"))
 
 
+def test_upload_duplicate_content_reuses_existing_table(tmp_path: Path) -> None:
+    """内容完全一致时返回 200 + warning，不落盘第二份副本。"""
+    _, source_dir = _mock_files(tmp_path)
+    app = create_app(_settings(tmp_path))
+    content = _xlsx_bytes(source_dir, "工单表_A区")
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/v1/assistant/tables/upload",
+            files={"file": ("园区工单表.xlsx", content, _XLSX_MEDIA_TYPE)},
+        )
+        second = client.post(
+            "/api/v1/assistant/tables/upload",
+            files={"file": ("重复副本.xlsx", content, _XLSX_MEDIA_TYPE)},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    body = second.json()
+    assert body["imported"]["name"] == "园区工单表"
+    assert any("完全一致" in warning and "园区工单表" in warning for warning in body["warnings"])
+    assert len(list((tmp_path / "tables").glob("upload_*.xlsx"))) == 1
+    assert len(body["tables"]) == 1
+    index = (tmp_path / "tables" / "upload_index.json").read_text(encoding="utf-8")
+    assert index.count("original_stem") == 1
+
+
 def test_upload_accepts_multiple_files_in_one_request(tmp_path: Path) -> None:
     rows, source_dir = _mock_files(tmp_path)
     app = create_app(_settings(tmp_path))

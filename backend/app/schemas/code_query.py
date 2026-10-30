@@ -134,3 +134,19 @@ class CodeQueryResponse(BaseModel):
     word_download_url: str | None = None
     code: CodeExecutionInfo
     meta: CodeQueryMeta
+
+
+class ActionResultResponse(BaseModel):
+    """Agent 工具调用结果，不包含图表或查询结果表。
+
+    前端看到 ``type == "action_result"`` 时不应走图表渲染分支。
+    """
+
+    request_id: str
+    type: Literal["action_result"] = "action_result"
+    action: Literal["delete_table"] = "delete_table"
+    success: bool = True
+    message: str
+    deleted_table: str | None = None
+    remaining_tables: list[str] = Field(default_factory=list)
+    candidates: list[str] = Field(default_factory=list)
