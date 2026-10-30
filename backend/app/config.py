@@ -5,16 +5,21 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 应用根目录（backend/）。所有相对路径都以它为基准，而不是进程工作目录：
-# Windows 绿色版双击启动时 CWD 通常是启动器所在目录甚至是 System32，
-# 依赖 CWD 会让数据目录、日志和 .env 全部漂移。
-APP_HOME = Path(__file__).resolve().parents[1]
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包后 __file__ 指向解包临时目录（onefile 会被清理），
+    # 因此以 exe 所在目录作为应用根目录，保证 .env 与 .runtime 可写且稳定。
+    APP_HOME = Path(sys.executable).resolve().parent
+else:
+    # 源码运行：应用根目录固定为 backend/，不依赖进程工作目录。
+    # Windows 绿色版双击启动时 CWD 可能是启动器目录甚至 System32。
+    APP_HOME = Path(__file__).resolve().parents[1]
 
 
 def _anchor_to_app_home(value: Path) -> Path:

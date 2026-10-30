@@ -30,3 +30,8 @@ target/
 # Excel 导出物（测试临时文件）
 *.xlsx
 !docs/**/*.xlsx
+
+# PyInstaller 打包产物
+backend/build/
+backend/dist/
+*.spec

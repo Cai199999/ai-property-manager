@@ -10,7 +10,6 @@ import builtins
 import json
 import math
 import re
-import resource
 import sys
 import traceback
 from datetime import date, datetime
@@ -19,6 +18,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+try:  # Windows 没有 resource 模块，降级模式下跳过 rlimit 设置
+    import resource
+except ImportError:  # pragma: no cover - 仅 Windows 触发
+    resource = None  # type: ignore[assignment]
 
 _SAFE_BUILTIN_NAMES = (
     "abs",
@@ -209,7 +213,12 @@ def _restore_frame(payload: dict[str, Any]) -> pd.DataFrame:
 
 
 def _apply_resource_limits() -> None:
-    """限制 CPU、地址空间、文件大小和进程数，防止资源耗尽。"""
+    """限制 CPU、地址空间、文件大小和进程数，防止资源耗尽。
+
+    Windows 没有 resource 模块，只保留父进程的超时强杀作为兜底。
+    """
+    if resource is None:
+        return
     limits = (
         (resource.RLIMIT_CPU, (5, 5)),
         (resource.RLIMIT_AS, (1_500_000_000, 1_500_000_000)),
