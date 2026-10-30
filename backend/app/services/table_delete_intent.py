@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from app.services.table_deletion import DELETE_SECURITY_MESSAGE
+
 # 常见删除动词；不使用单独的“清空”，避免把清空内容误判为删除表。
 _ACTION_RE = re.compile(r"(?:删除|删掉|删去|删了|移除|去掉|清除|干掉|清理掉)")
 # 结构性对象提示词，确保“删除 A 区数据”不会被当成删表。
@@ -81,6 +83,8 @@ def detect_delete_intent(
     raw = (message or "").strip()
     if not looks_like_table_delete(raw):
         return None
+    if _looks_like_path_input(raw):
+        return DeleteTableIssue(message=DELETE_SECURITY_MESSAGE)
 
     names = tuple(dict.fromkeys(name for name in table_names if name))
     normalized_message = _normalize(raw)
@@ -101,6 +105,17 @@ def detect_delete_intent(
     if requested:
         return DeleteTableIssue(message=f"未找到数据表：{requested}")
     return DeleteTableIssue(message="请指定要删除的数据表名称")
+
+
+def _looks_like_path_input(message: str) -> bool:
+    """拦截自然语言中的路径穿越/绝对路径，避免绕过表名白名单。"""
+    if ".." in message or "\\" in message or "~" in message or message.startswith("/"):
+        return True
+    if re.search(r"(?:^|\s)/", message):
+        return True
+    if re.search(r"(?:^|\s)[A-Za-z]:[\\/]", message):
+        return True
+    return False
 
 
 def _aliases(name: str) -> tuple[str, ...]:

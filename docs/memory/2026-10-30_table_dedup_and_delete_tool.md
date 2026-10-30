@@ -16,6 +16,7 @@
 3. **删表工具**
    - 新增 `table_delete_intent.py`：规则识别删除动词 + 结构性对象；排除“删除表里的数据/记录/行”。
    - 新增 `table_deletion.py`：删除目标 `.xlsx` 及同 MD5 副本；同步移除 `upload_index.json`、`manifest.json` 记录与 `concat_tables` / `schema_groups` 引用；先隔离重命名、再原子写元数据、最后物理删除，失败可回滚。
+   - **安全加固**：`delete_table_tool` 拒绝 `..`、`/`、`\`、`~`、绝对路径与控制字符；待删文件 `resolve()` 后必须通过 `relative_to(data_table_dir)` 前缀校验；同内容副本中的越界软链接仅跳过、不删除。自然语言入口同样拦截路径形态输入，统一返回“安全限制：只能删除工作区内的数据表”。
    - `CodeQueryAgent` 在 LLM/沙箱之前处理删表，返回 `ActionResultResponse`（`type=action_result`），成功消息“已成功删除数据表：XXX”。
    - 前端识别 `action_result`：不渲染图表，Toast “删除成功”，重新请求 `/tables` 刷新当前数据表。
 4. **脏数据清理**
@@ -25,7 +26,7 @@
 
 ## 验证
 
-- `pytest`：131 passed（新增重复上传、意图识别、删表 API、索引/副本清理等用例）。
+- `pytest`：144 passed（新增重复上传、意图识别、删表 API、索引/副本清理、路径穿越与软链接安全用例）。
 - `black` 已执行。
 - 前端为原生 HTML/JS，无独立测试框架；已通过真实 API/浏览器手动验证路径待用户执行“删除工单表_A区”。
 

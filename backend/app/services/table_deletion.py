@@ -23,6 +23,9 @@ from app.services.table_catalog import (
 
 logger = logging.getLogger(__name__)
 
+# 对前端与单元测试暴露统一的安全错误文案，避免不同入口返回不同提示。
+DELETE_SECURITY_MESSAGE = "安全限制：只能删除工作区内的数据表"
+
 
 @dataclass(frozen=True, slots=True)
 class TableDeletionResult:
@@ -45,22 +48,27 @@ class TableDeletionService:
     def enabled(self) -> bool:
         return self._catalog is not None and self._settings.table_directory_enabled
 
-    def delete_table(self, table_name: str) -> TableDeletionResult:
-        """删除指定表及其同内容副本，返回删除后的剩余表名。"""
+    def delete_table_tool(self, table_name: str) -> TableDeletionResult:
+        """删除指定表及其同内容副本，返回删除后的剩余表名。
+
+        安全边界（硬约束）：
+        1. 表名只能是名称，不允许出现 ``..``、``/``、``\\``、``~`` 或绝对路径；
+        2. 每个待删文件必须解析为绝对路径，且必须位于 ``data_table_dir`` 内；
+        3. 只删除工作区内由系统托管的 ``.xlsx`` 副本，不做目录级删除。
+        """
         if not self.enabled or self._catalog is None:
             raise TableImportUnavailableError()
 
-        directory = self._directory.resolve()
+        safe_name = self._validate_table_name(table_name)
+        directory = self._workspace_root()
         with self._catalog.operation_lock:
             snapshot = self._catalog.scan()
-            dataset = snapshot.table_map().get(table_name)
+            dataset = snapshot.table_map().get(safe_name)
             if dataset is None:
                 raise TableNotFoundError()
 
-            target = dataset.path.resolve()
-            # 双保险：只允许删除数据表目录内的 .xlsx，防止路径穿越。
-            if target.parent != directory or target.suffix.lower() != ".xlsx":
-                raise TableDeletionError("数据表路径不合法，已取消删除")
+            # 扫描结果来自目录，但仍重新解析并做前缀校验，防止符号链接或竞态。
+            target = self._resolve_workspace_file(dataset.path)
 
             # 同一份内容可能被历史重复上传过，全部一起删除，
             # 否则删掉一份后，去重逻辑会把另一份重新暴露出来。
@@ -99,7 +107,7 @@ class TableDeletionService:
             manifest_changed = self._remove_manifest_entries(
                 manifest_payload,
                 deleted_names=deleted_names,
-                table_name=table_name,
+                table_name=safe_name,
             )
 
             quarantined: list[tuple[Path, Path]] = []
@@ -124,7 +132,7 @@ class TableDeletionService:
                 self._restore_json(manifest_path, original_manifest)
                 if isinstance(exc, TableDeletionError):
                     raise
-                logger.warning("删除数据表失败 table=%s error=%s", table_name, type(exc).__name__)
+                logger.warning("删除数据表失败 table=%s error=%s", safe_name, type(exc).__name__)
                 raise TableDeletionError() from exc
 
             # 元数据已落盘，再物理删除隔离文件；单个文件 unlink 失败只记录日志，
@@ -144,15 +152,64 @@ class TableDeletionService:
                     table.name for table in snapshot.tables if table.name != table_name
                 )
 
-        logger.info("已删除数据表 table=%s files=%s", table_name, len(file_paths))
+        logger.info("已删除数据表 table=%s files=%s", safe_name, len(file_paths))
         return TableDeletionResult(
-            deleted_table=table_name,
+            deleted_table=safe_name,
             deleted_files=tuple(sorted(deleted_names)),
             remaining_tables=remaining,
         )
 
+    def delete_table(self, table_name: str) -> TableDeletionResult:
+        """兼容旧调用名；实际执行 ``delete_table_tool``。"""
+        return self.delete_table_tool(table_name)
+
+    def _workspace_root(self) -> Path:
+        """工作区绝对路径；后续所有待删文件都必须以它为前缀。"""
+        return self._directory.resolve()
+
+    @staticmethod
+    def _validate_table_name(table_name: str) -> str:
+        """拒绝任何路径形态的表名，表目录内只接受纯名称查找。"""
+        raw = (table_name or "").strip()
+        if not raw or len(raw) > 255:
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE)
+        if "\x00" in raw or any(ord(char) < 32 for char in raw):
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE)
+        # 明确拦截路径穿越与路径分隔符；正常中文表名不会包含这些字符。
+        if (
+            raw in {".", ".."}
+            or ".." in raw
+            or "/" in raw
+            or "\\" in raw
+            or raw.startswith("~")
+            or Path(raw).is_absolute()
+        ):
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE)
+        return raw
+
+    def _resolve_workspace_file(self, path: Path) -> Path:
+        """把待删文件解析为绝对路径，并强制校验位于工作区内。
+
+        ``Path.resolve`` 会展开符号链接，因此可拦截“工作区内软链接指向外部”
+        的情况；``relative_to`` 做的是路径分量级前缀匹配，能避免
+        ``/tables-evil`` 伪装成 ``/tables`` 的前缀。
+        """
+        workspace = self._workspace_root()
+        if ".." in path.parts:
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE)
+        resolved = path.resolve()
+        try:
+            relative = resolved.relative_to(workspace)
+        except ValueError as exc:
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE) from exc
+        if not relative.parts or resolved.suffix.lower() != ".xlsx":
+            raise TableDeletionError(DELETE_SECURITY_MESSAGE)
+        if not resolved.is_file():
+            raise TableDeletionError("数据表文件不存在，已取消删除")
+        return resolved
+
     def _same_content_files(self, target: Path) -> list[Path]:
-        """查找与目标文件 MD5 相同的所有目录内 .xlsx。"""
+        """查找与目标文件 MD5 相同的所有工作区内 .xlsx。"""
         assert self._catalog is not None
         try:
             target_digest = self._catalog.file_digest(target)
@@ -162,11 +219,14 @@ class TableDeletionService:
         matches: list[Path] = []
         for path in self._directory.glob("*.xlsx"):
             try:
-                resolved = path.resolve()
-                if resolved.parent != target.parent or not resolved.is_file():
+                resolved = self._resolve_workspace_file(path)
+                if resolved == target:
                     continue
                 if self._catalog.file_digest(resolved) == target_digest:
                     matches.append(resolved)
+            except TableDeletionError:
+                # 工作区外软链接或异常路径一律跳过，绝不删除。
+                logger.warning("跳过工作区外或异常路径 file=%s", path.name)
             except OSError:
                 continue
         return matches

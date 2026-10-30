@@ -168,7 +168,7 @@ class CodeQueryAgent:
         assert isinstance(intent, DeleteTableIntent)
         try:
             result = await anyio.to_thread.run_sync(
-                partial(self._table_deletion.delete_table, intent.table_name)
+                partial(self._table_deletion.delete_table_tool, intent.table_name)
             )
         except (TableNotFoundError, TableDeletionError, TableImportUnavailableError) as exc:
             logger.info(

@@ -1,17 +1,21 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.config import Settings
+from app.core.exceptions import TableDeletionError
 from app.main import create_app
 from app.services.mock_tables import generate_mock_tables
+from app.services.table_catalog import TableCatalog
 from app.services.table_delete_intent import (
     DeleteTableIntent,
     DeleteTableIssue,
     detect_delete_intent,
 )
+from app.services.table_deletion import DELETE_SECURITY_MESSAGE, TableDeletionService
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -171,3 +175,108 @@ def test_delete_unknown_table_returns_failed_action_result(tmp_path: Path) -> No
     assert body["success"] is False
     assert "未找到数据表" in body["message"]
     assert (tmp_path / "工单表_A区.xlsx").exists()
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [
+        "../secret.xlsx",
+        "../../etc/passwd",
+        "/etc/passwd",
+        "~/secret.xlsx",
+        "tables\\..\\secret.xlsx",
+        "..",
+        "./工单表_A区.xlsx",
+    ],
+)
+def test_delete_table_tool_rejects_path_traversal(
+    tmp_path: Path,
+    table_name: str,
+) -> None:
+    """任何路径形态的表名都必须在查表/落盘之前被拒绝。"""
+    tables_dir = tmp_path / "tables"
+    generate_mock_tables(tables_dir)
+    secret = tmp_path / "secret.xlsx"
+    secret.write_bytes((tables_dir / "工单表_A区.xlsx").read_bytes())
+    settings = _settings(tables_dir)
+    service = TableDeletionService(settings, TableCatalog(settings))
+
+    with pytest.raises(TableDeletionError) as error:
+        service.delete_table_tool(table_name)
+
+    assert error.value.message == DELETE_SECURITY_MESSAGE
+    assert (tables_dir / "工单表_A区.xlsx").exists()
+    assert secret.exists()
+
+
+def test_delete_table_tool_rejects_absolute_path_outside_workspace(
+    tmp_path: Path,
+) -> None:
+    tables_dir = tmp_path / "tables"
+    generate_mock_tables(tables_dir)
+    outside = tmp_path / "outside-source.xlsx"
+    outside.write_bytes((tables_dir / "工单表_A区.xlsx").read_bytes())
+    settings = _settings(tables_dir)
+    service = TableDeletionService(settings, TableCatalog(settings))
+
+    with pytest.raises(TableDeletionError) as error:
+        service.delete_table_tool(str(outside))
+
+    assert error.value.message == DELETE_SECURITY_MESSAGE
+    assert outside.exists()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "删除../工单表_A区.xlsx",
+        "删除 ../工单表_A区",
+        "删除 /etc/工单表_A区",
+        "移除 ~/工单表_A区",
+    ],
+)
+def test_delete_intent_rejects_path_like_input(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    """自然语言入口同样不能借路径穿越绕过表名白名单。"""
+    generate_mock_tables(tmp_path)
+    app = create_app(
+        _settings(tmp_path),
+        extractor=_ExplodingExtractor(),  # type: ignore[arg-type]
+        code_generator=_ExplodingGenerator(),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/query/code",
+            json={"message": message},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "action_result"
+    assert body["success"] is False
+    assert body["message"] == DELETE_SECURITY_MESSAGE
+    assert (tmp_path / "工单表_A区.xlsx").exists()
+
+
+def test_delete_does_not_follow_workspace_symlink_to_outside(
+    tmp_path: Path,
+) -> None:
+    """工作区内指向外部的软链接即使内容相同，也绝不能删除外部目标。"""
+    tables_dir = tmp_path / "tables"
+    generate_mock_tables(tables_dir)
+    outside = tmp_path / "outside-source.xlsx"
+    outside.write_bytes((tables_dir / "工单表_A区.xlsx").read_bytes())
+    link = tables_dir / "upload_evil.xlsx"
+    link.symlink_to(outside)
+
+    settings = _settings(tables_dir)
+    service = TableDeletionService(settings, TableCatalog(settings))
+    result = service.delete_table_tool("工单表_A区")
+
+    assert result.deleted_table == "工单表_A区"
+    assert not (tables_dir / "工单表_A区.xlsx").exists()
+    assert outside.exists()
+    assert link.exists()
