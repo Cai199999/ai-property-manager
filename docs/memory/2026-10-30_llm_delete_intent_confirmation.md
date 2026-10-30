@@ -36,8 +36,22 @@
 - 隔离目录 E2E（端口 8020 + 临时 `DATA_TABLE_DIR`）：首次请求返回 `confirmation_required`（table_count=3）；取消后表仍在；确认后 `action_result.success=true`，3 个 `.xlsx` 删除、`manifest.tables=[]`、`upload_index={}`；令牌复用返回 `success=false`。
 - 生产工作区验证：`删除所有数据表` 返回 `confirmation_required`；伪造令牌返回 `success=false` 且 3 张表保持原样；短令牌被网关 400 拦截。
 
+## 前端二次确认（同日完成）
+
+- `frontend/index.html` 的 `/query/code` 响应处理新增 `type === "confirmation_required"` 分支，优先于图表/结果解析，命中后只弹窗。
+- 新增 `#deleteAllModal`（`role="alertdialog"`）：⚠️ 图标 + 后端 `message` + “将删除 N 张数据表，删除后无法恢复。”；按钮为灰色【取消】与红色【确认清空（不可逆）】，窄屏自动换行。
+- 令牌只存 `pendingDeleteAllToken` 内存变量；取消/关闭/遮罩点击/Esc 均丢弃令牌且不发请求。
+- 确认时禁用两个按钮并显示“正在删除…”，POST `/api/v1/assistant/tables/delete-all/confirm`；成功则 Toast、清空图表/表格/下载链接、本地清空目录并刷新 `/tables`；业务失败或 HTTP 失败均 Toast 后关闭弹窗。
+- `action_result.action === "none"`（指代不明）固定 Toast “请明确指定数据表的名称（例如：工单表_A区）”，后端原始原因显示在错误区。
+- 弹窗未关闭时禁止发起新查询，避免覆盖待确认令牌。
+
+## 验证（前端）
+
+- 内联脚本 `node --check` 通过；DOM id 引用全部唯一且存在。
+- 网关 `OPTIONS` 预检确认 `/tables/delete-all/confirm` 在 CORS 白名单内。
+- 浏览器点击流程由用户在 8081 实测（当前环境无 headless 浏览器）。
+
 ## 注意
 
 - “把全部工单表都删掉”这类隐含多表的说法会被判为 `ambiguous_delete` 并列出候选——这是有意的保守行为。
 - 令牌只在单进程内存中；服务重启或多实例部署需重新发起。
-- 前端二次确认 Modal 尚未实现（下一步）。当前生产前端收到 `type=confirmation_required` 会按未知响应处理，需尽快补齐。

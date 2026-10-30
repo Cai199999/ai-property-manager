@@ -1027,6 +1027,75 @@
       padding: 0 20px;
     }
 
+    /* ── 删除全部表：高风险二次确认 ─────────────────────────── */
+    .modal--danger {
+      border-color: color-mix(in srgb, var(--danger) 38%, var(--hairline));
+    }
+
+    /* 窄屏下两个按钮允许换行，避免“确认清空”被挤压。 */
+    .modal--danger .modal-actions {
+      flex-wrap: wrap;
+    }
+
+    .modal-kicker--danger {
+      color: var(--danger);
+    }
+
+    .danger-heading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .danger-icon {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .danger-body {
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+      padding: 14px 16px;
+      border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--hairline));
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+    }
+
+    .danger-message {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .query-button--danger {
+      background: var(--danger);
+      color: #fff;
+    }
+
+    .query-button--danger:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--danger) 86%, #000);
+    }
+
+    /* 深色主题下 --danger 为浅红，白字对比度不足，改用深色文字。 */
+    @media (prefers-color-scheme: dark) {
+      :root:where(:not([data-theme="light"])) .query-button--danger {
+        color: #1c0b08;
+      }
+    }
+
+    :root[data-theme="dark"] .query-button--danger {
+      color: #1c0b08;
+    }
+
     .toast {
       position: fixed;
       left: 50%;
@@ -1403,6 +1472,36 @@
       </form>
     </section>
   </div>
+  <!-- 删除全部表：不可逆操作，必须在前端再次显式确认后才调用确认接口。 -->
+  <div class="modal-backdrop" id="deleteAllModal" hidden>
+    <section class="modal modal--danger" role="alertdialog" aria-modal="true"
+             aria-labelledby="deleteAllTitle"
+             aria-describedby="deleteAllMessage deleteAllCount">
+      <div class="modal-head">
+        <div class="danger-heading">
+          <span class="danger-icon" aria-hidden="true">⚠️</span>
+          <div>
+            <p class="modal-kicker modal-kicker--danger">高风险操作</p>
+            <h2 id="deleteAllTitle">删除全部数据表</h2>
+          </div>
+        </div>
+        <button class="modal-close" id="deleteAllClose" type="button"
+                aria-label="取消并关闭">×</button>
+      </div>
+      <div class="danger-body">
+        <p class="danger-message" id="deleteAllMessage">
+          检测到您要删除所有数据表，此操作不可逆，是否确认？
+        </p>
+        <p class="modal-hint" id="deleteAllCount">删除后无法恢复。</p>
+      </div>
+      <div class="modal-actions">
+        <button class="query-button query-button--secondary" id="deleteAllCancel"
+                type="button">取消</button>
+        <button class="query-button query-button--danger" id="deleteAllConfirm"
+                type="button">确认清空（不可逆）</button>
+      </div>
+    </section>
+  </div>
   <div class="toast" id="toast" role="alert" aria-live="assertive" hidden></div>
 
   <script src="vendor/echarts.min.js"></script>
@@ -1422,6 +1521,12 @@
       const modelNameInput = document.getElementById("modelName");
       const modelApiKey = document.getElementById("modelApiKey");
       const modelApiKeyToggle = document.getElementById("modelApiKeyToggle");
+      const deleteAllModal = document.getElementById("deleteAllModal");
+      const deleteAllMessage = document.getElementById("deleteAllMessage");
+      const deleteAllCount = document.getElementById("deleteAllCount");
+      const deleteAllClose = document.getElementById("deleteAllClose");
+      const deleteAllCancel = document.getElementById("deleteAllCancel");
+      const deleteAllConfirm = document.getElementById("deleteAllConfirm");
       const toastElement = document.getElementById("toast");
       const emptyState = document.getElementById("emptyState");
       const errorState = document.getElementById("errorState");
@@ -1467,6 +1572,7 @@
       const tablePreviewEndpoint = `${apiBase}/tables/preview`;
       const uploadEndpoint = `${apiBase}/tables/upload`;
       const tablesEndpoint = `${apiBase}/tables`;
+      const deleteAllConfirmEndpoint = `${apiBase}/tables/delete-all/confirm`;
       const previewPageSize = 50;
       const maxUploadBytes = 20 * 1024 * 1024;
       // 与网关 gateway.agent.upload-max-files、后端 TABLE_UPLOAD_MAX_FILES 保持一致。
@@ -1486,6 +1592,10 @@
       let textureEnabled = contrastMedia.matches;
       let isQuerying = false;
       let isUploading = false;
+      // 删除全部表的确认令牌只保存在内存中，关闭弹窗即丢弃。
+      let pendingDeleteAllToken = "";
+      let isConfirmingDeleteAll = false;
+      const deleteAllConfirmLabel = "确认清空（不可逆）";
       let previewAbortController = null;
       const previewState = {
         name: "",
@@ -2072,24 +2182,46 @@
         rememberUploadedTables(payload?.tables);
       };
 
+      // 工具调用不渲染图表/结果表；清空上一轮查询的图表、表格与下载按钮。
+      const clearDynamicResult = () => {
+        dynamicPayload = null;
+        if (dynamicChart) {
+          dynamicChart.clear();
+        }
+        dynamicChartElement.hidden = true;
+        dynamicTableHead.replaceChildren();
+        dynamicTableBody.replaceChildren();
+        dynamicTableTitle.textContent = "查询结果";
+        dynamicFootnote.textContent = "";
+        dynamicFootnote.hidden = true;
+        bindDownloadButton(downloadButton, null, "xlsx", "result.xlsx");
+        bindDownloadButton(wordDownloadButton, null, "docx", "report.docx");
+        renderQueryWarnings([]);
+      };
+
       const handleActionResult = async (payload) => {
         const message = typeof payload?.message === "string" && payload.message.trim()
           ? payload.message.trim()
           : "操作已完成";
         if (payload?.success === false) {
+          // 指代不明（如“删除前几个表”）统一给出可操作的提示，
+          // 后端原始原因放在错误区，便于排查具体命中了哪些候选。
+          if (payload?.action === "none") {
+            showToast("请明确指定数据表的名称（例如：工单表_A区）", "error");
+            showQueryError(message);
+            return;
+          }
           showToast(message, "error");
           showQueryError(message);
           return;
         }
 
         // 工具调用结果不渲染图表或结果表，只提示并刷新左栏数据表。
-        showToast("删除成功", "success");
-        dynamicPayload = null;
-        if (dynamicChart) {
-          dynamicChart.clear();
-        }
-        dynamicChartElement.hidden = true;
-        renderQueryWarnings([]);
+        showToast(
+          payload?.action === "delete_all_tables" ? message : "删除成功",
+          "success"
+        );
+        clearDynamicResult();
         showEmptyState(message);
         showQueryStatus(message, "success");
         try {
@@ -2098,6 +2230,140 @@
           showToast("数据表列表刷新失败，请手动刷新页面", "error");
         }
       };
+
+      // ── 删除全部表：二次确认 ───────────────────────────────
+      const closeDeleteAllModal = () => {
+        deleteAllModal.hidden = true;
+        document.body.classList.remove("modal-open");
+        pendingDeleteAllToken = "";
+      };
+
+      const openDeleteAllConfirmation = (payload) => {
+        const token = typeof payload?.confirmation_token === "string"
+          ? payload.confirmation_token.trim()
+          : "";
+        if (!token) {
+          showQueryError("删除确认信息缺失，请重新发起删除操作。");
+          return;
+        }
+        const message = typeof payload?.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : "检测到您要删除所有数据表，此操作不可逆，是否确认？";
+        const tableCount = Number(payload?.table_count || 0);
+
+        pendingDeleteAllToken = token;
+        deleteAllMessage.textContent = message;
+        deleteAllCount.textContent = tableCount > 0
+          ? `将删除 ${numberFormatter.format(tableCount)} 张数据表，删除后无法恢复。`
+          : "删除后无法恢复。";
+        deleteAllConfirm.disabled = false;
+        deleteAllCancel.disabled = false;
+        deleteAllConfirm.textContent = deleteAllConfirmLabel;
+        deleteAllModal.hidden = false;
+        document.body.classList.add("modal-open");
+        showQueryStatus("等待确认：删除全部数据表", "loading");
+        // 默认焦点放在“取消”，避免误按回车触发不可逆操作。
+        deleteAllCancel.focus();
+      };
+
+      const cancelDeleteAll = () => {
+        const hadPending = Boolean(pendingDeleteAllToken);
+        closeDeleteAllModal();
+        if (hadPending) {
+          showQueryStatus("已取消删除全部数据表，数据表未做任何改动", "success");
+        }
+        queryInput.focus();
+      };
+
+      const submitDeleteAllConfirmation = async () => {
+        if (isConfirmingDeleteAll) {
+          return;
+        }
+        const token = pendingDeleteAllToken;
+        if (!token) {
+          closeDeleteAllModal();
+          showToast("确认信息已失效，请重新发起删除操作", "error");
+          return;
+        }
+
+        isConfirmingDeleteAll = true;
+        deleteAllConfirm.disabled = true;
+        deleteAllCancel.disabled = true;
+        deleteAllConfirm.textContent = "正在删除…";
+
+        try {
+          let response;
+          try {
+            response = await fetch(deleteAllConfirmEndpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ confirmation_token: token })
+            });
+          } catch {
+            throw new Error("无法连接 8080，请确认网关已启动");
+          }
+
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch {
+            payload = null;
+          }
+          if (!response.ok) {
+            throw new Error(httpErrorMessage(response.status, payload));
+          }
+
+          const message = typeof payload?.message === "string" && payload.message.trim()
+            ? payload.message.trim()
+            : "已删除全部数据表";
+          if (payload?.success === false) {
+            closeDeleteAllModal();
+            showToast(message, "error");
+            showQueryError(message);
+            return;
+          }
+
+          closeDeleteAllModal();
+          showToast(message, "success");
+          clearDynamicResult();
+          closeTablePreview();
+          // 全部表已删除，先本地清空目录，避免刷新失败时残留旧表。
+          uploadedTables.clear();
+          renderTableCatalog();
+          showEmptyState(message);
+          showQueryStatus(message, "success");
+          try {
+            await refreshTableCatalog();
+          } catch {
+            showToast("数据表列表刷新失败，请手动刷新页面", "error");
+          }
+        } catch (error) {
+          closeDeleteAllModal();
+          showToast(error.message || "删除失败，请稍后重试。", "error");
+        } finally {
+          isConfirmingDeleteAll = false;
+          deleteAllConfirm.disabled = false;
+          deleteAllCancel.disabled = false;
+          deleteAllConfirm.textContent = deleteAllConfirmLabel;
+        }
+      };
+
+      deleteAllCancel.addEventListener("click", cancelDeleteAll);
+      deleteAllClose.addEventListener("click", cancelDeleteAll);
+      deleteAllConfirm.addEventListener("click", () => {
+        void submitDeleteAllConfirmation();
+      });
+      deleteAllModal.addEventListener("click", (event) => {
+        if (event.target === deleteAllModal && !isConfirmingDeleteAll) {
+          cancelDeleteAll();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !deleteAllModal.hidden && !isConfirmingDeleteAll) {
+          event.preventDefault();
+          cancelDeleteAll();
+        }
+      });
 
       const showPreviewStatus = (message, kind) => {
         tablePreviewStatus.textContent = message;
@@ -2380,7 +2646,8 @@
       });
 
       const runDynamicQuery = async () => {
-        if (isQuerying) {
+        // 删除确认弹窗未处理完时，不允许发起新查询，避免覆盖待确认令牌。
+        if (isQuerying || !deleteAllModal.hidden) {
           return;
         }
 
@@ -2433,6 +2700,11 @@
           }
           if (!response.ok) {
             throw new Error(httpErrorMessage(response.status, payload));
+          }
+          // 高风险删除：只弹确认框，绝不进入图表/结果解析分支。
+          if (payload?.type === "confirmation_required") {
+            openDeleteAllConfirmation(payload);
+            return;
           }
           if (payload?.type === "action_result") {
             await handleActionResult(payload);
