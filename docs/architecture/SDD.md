@@ -47,9 +47,11 @@ Python Agent FastAPI (8000，仅 127.0.0.1)
 
 ```
 POST /query/code
- → 规则识别删表意图（命中则走 delete_table_tool，直接返回 action_result）
  → 解析 BYOK 覆盖（provider_type / user_api_key / model_name）
- → LLM 解析时间范围（系统 Key 失败可降级规则；用户 Key 失败直接 401）
+ → LLM 意图理解（query / delete_specific_table / delete_all_tables / ambiguous_delete，
+   同时解析时间范围；系统 Key 失败可降级规则；用户 Key 失败直接 401）
+ → 命中删表意图优先返回：单表直接 action_result；全表返回 confirmation_required
+ → 其余情况继续代码查询链路
  → 扫描多表目录（MD5 去重 → 同构分组）
  → LLM 生成 Pandas 代码
  → 静态安全校验 → bwrap 执行（失败带错误反馈重试，最多 3 次）
@@ -68,6 +70,7 @@ POST /query/code
 | GET | `/api/v1/assistant/tables` | — | 表目录、主表、警告 |
 | GET | `/api/v1/assistant/tables/preview` | `name`、`offset≥0`、`limit 1–200` | 原始 Excel 分页 |
 | POST | `/api/v1/assistant/tables/upload` | multipart：`file` 可重复，≤10 个 / 总大小 ≤20MB | 导入结果 + 最新目录 |
+| POST | `/api/v1/assistant/tables/delete-all/confirm` | `confirmation_token`(20–256) | 删除全部表 `action_result` |
 | GET | `/api/v1/assistant/download/{filename}` | 文件名白名单校验 | 文件流（Excel/Word） |
 
 上传约定：网关把文件段统一改名为 `upload_N.xlsx`（ASCII），原始中文文件名通过重复的 `filename` 字段按顺序透传，避免 multipart 编码问题。
@@ -118,6 +121,37 @@ POST /query/code
 - 意图不唯一或表名不存在时仍返回 HTTP 200，`success=false`，`message` 说明原因，`candidates` 给出候选；不会执行删除。
 - 文件/元数据写入失败返回 `success=false`，不会静默吞错。
 
+**删除全部表：二次确认（confirmation_required）**
+
+第一次请求**绝不执行删除**，只签发一次性令牌：
+
+```json
+{
+  "request_id": "...",
+  "type": "confirmation_required",
+  "action": "delete_all_tables",
+  "message": "检测到您要删除所有数据表，此操作不可逆，是否确认？",
+  "confirmation_token": "…43 字符…",
+  "expires_at": "2026-10-30T11:09:27+08:00",
+  "table_count": 3
+}
+```
+
+前端必须弹出原生 `confirm()` 或等价警告 Modal（文案：`⚠️ 警告：您正在删除所有数据表，是否继续？`），**不渲染图表/结果表**：
+
+- 用户取消 → 丢弃令牌，不发送任何请求，表保持原样。
+- 用户确认 → `POST /tables/delete-all/confirm`，body `{"confirmation_token": "…"}`。
+- 成功返回 `action="delete_all_tables"` 的 `action_result`，`deleted_tables` 列出被删表名，前端刷新 `/tables`。
+- 令牌无效/过期/已使用/表集已变化：HTTP 200 + `success=false`，`message` 提示重新发起；不会删除任何文件。
+
+令牌安全约束：
+
+- 服务端内存存储（`DeleteAllConfirmationStore`），**不落盘、不写日志、不回显到错误体**。
+- 一次性：`consume` 时原子 pop，重复提交必然失败。
+- TTL `DELETE_CONFIRMATION_TTL_SECONDS`（默认 120s，范围 30–600）。
+- 指纹绑定：令牌与签发时的表集合指纹 `SHA-256(filename\0mtime_ns\0size)` 绑定；确认时重新计算并比对，期间任何表被上传/删除/改动都会使确认失效，防止“确认的是 A 集合、删的是 B 集合”。
+- 服务重启即全部失效，属于预期行为。
+
 ### 2.3 统一错误体
 
 ```json
@@ -166,13 +200,36 @@ POST /query/code
 - 非同构表只提供“同名列”作为 join 线索，不自动 JOIN。
 - **重要边界**：MD5 只解决“整份文件重复”。两份文件内容部分重叠但 MD5 不同时，仍会原样 concat，系统不做行级去重。
 
-### 3.4 删表工具（delete_table_tool）
+### 3.4 删除意图理解与删表工具
 
-- 规则识别（`table_delete_intent.py`）：必须同时出现删除动词（删除/删掉/移除/去掉等）与结构性对象（表/表格/数据表/Excel 文件等）；包含“表里的数据/记录/行”等行级操作时**不拦截**。
-- 表名匹配：先按目录当前表名做归一化别名匹配（忽略空格、下划线、`工单表` 前缀），唯一命中才执行；多命中返回候选，零命中返回“未找到/请指定”。
+**意图理解（`query_understanding.py`）**
+
+每次 `/query/code` 先做一次 LLM 调用（`temperature=0`、`response_format=json_object`），同时输出 `intent` 与时间范围：
+
+| intent | 触发语义 | 行为 |
+| --- | --- | --- |
+| `query` | 查询/统计/图表；含“删除表里的数据/记录/行”等行级操作 | 继续代码查询链路 |
+| `delete_specific_table` | 明确点名**一张**存在的表 | 直接调用 `delete_table_tool`，返回 `action_result` |
+| `delete_all_tables` | “全部/所有/所有数据表”（不点名具体表） | 只签发确认令牌，**不删任何文件** |
+| `ambiguous_delete` | 删除意图指向多张表、表名不存在、路径形态输入、置信度 < 0.7 | `success=false`，列出候选，不删任何文件 |
+
+- LLM 输出的表名**只做精确名称匹配**，永不作为文件路径使用；不在当前目录中的表名一律降级为 `ambiguous_delete`。
+- 用户 Key 401 直接上抛，不降级；系统 Key 失败时仅 `query` 可回退规则时间解析。
+- 旧版正则意图模块（`table_delete_intent.py`）已移除，避免两套删表入口并存。
+
+**单表删除（`delete_table_tool`）**
+
+- 表名匹配：按目录当前表名做归一化别名匹配（忽略空格、下划线、`工单表` 前缀），唯一命中才执行；多命中返回候选，零命中返回“未找到/请指定”。
 - 删除范围：目标 `.xlsx` 及目录内所有 **MD5 相同**的历史副本；同步移除 `upload_index.json` 键与 `manifest.json` 的 `tables` 记录，并清理其他表 `concat_tables`、`schema_groups` 中的引用。
 - 一致性：导入与删除共用 `TableCatalog.operation_lock`；先把文件重命名为隐藏隔离名，再原子写元数据，最后物理 unlink。元数据写失败会回滚文件与 JSON。
 - 安全：表名必须是纯名称；待删文件先解析为绝对路径，再按工作区绝对路径做路径分量级前缀校验。只有工作区内由系统托管的 `.xlsx` 副本可删，符号链接指向外部的目标一律跳过。
+
+**全部删除（`delete_all_tables`）**
+
+- 仅在 `/tables/delete-all/confirm` 校验令牌通过后执行，且确认时的表集合指纹必须与签发时一致。
+- 枚举范围与单表删除一致：`data_table_dir` 内真实 `.xlsx`；跳过 `~$` 临时文件与指向工作区外的符号链接。
+- 依次把全部文件重命名为 `.{name}.{uuid}.deleting` 隔离，再原子写入 `upload_index.json = {}`、`manifest.tables = []`、`manifest.schema_groups = []`，最后逐个 unlink 隔离文件；任一元数据写入失败即回滚文件名与 JSON。
+- 不使用 `shutil.rmtree`，不触碰目录本身与目录外文件。
 
 ### 3.5 执行与结果
 
@@ -214,6 +271,7 @@ frames(JSON) + code → bwrap stdin
 - 路径校验：每个待删文件先 `resolve()` 展开符号链接，再用 `relative_to(data_table_dir.resolve())` 做路径分量级前缀匹配；`/tables-evil` 不能伪装成 `/tables`。
 - 删除范围：仅限 `data_table_dir` 下的 `.xlsx` 副本；禁止 `shutil.rmtree`、禁止删除父目录或其他任何文件。
 - 失败策略：越界、包含 `..`、非 `.xlsx` 或文件不存在时立即报 “安全限制：只能删除工作区内的数据表”，不执行任何写操作。
+- 全部删除：必须持有效的一次性确认令牌，且表集合指纹未变化；令牌缺失/过期/复用/指纹不匹配时不进入文件操作分支。
 
 ### 4.4 超时与降级矩阵
 
@@ -249,3 +307,5 @@ frames(JSON) + code → bwrap stdin
 5. 豆包默认模型 `doubao-seed-1-6-250615` 为示例值，实际可能需在火山方舟创建推理接入点后填写 endpoint ID。
 6. MD5 去重仅覆盖整文件重复，不做行级去重；跨文件部分重叠需在业务口径中明确。
 7. 删表会连同同 MD5 的历史副本一起删除；不做回收站，删除前请自行备份。
+8. 每次 `/query/code` 都多出一次意图理解 LLM 调用（与时间解析合并为同一次），会带来额外延迟与 Token 成本；可用 `LLM_FALLBACK_ENABLED` 控制系统 Key 失败时的规则降级。
+9. 删除全部表的确认令牌只存在于单进程内存：TTL 120s、单次有效、绑定表集合指纹；多实例部署或服务重启后需重新发起删除请求。

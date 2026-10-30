@@ -51,6 +51,8 @@ class Settings(BaseSettings):
         ge=1_000_000,
         le=1_000_000_000,
     )
+    # 删除全部表必须经过服务端一次性令牌确认；TTL 不宜过长。
+    delete_confirmation_ttl_seconds: int = Field(default=120, ge=30, le=600)
     # 前端 8081 直传 FastAPI 时需要的跨域白名单，逗号分隔。
     cors_origins: str = "http://127.0.0.1:8081,http://localhost:8081"
 

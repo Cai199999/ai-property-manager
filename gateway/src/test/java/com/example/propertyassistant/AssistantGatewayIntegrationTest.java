@@ -129,6 +129,18 @@ class AssistantGatewayIntegrationTest {
             }
             """;
 
+    private static final String CONFIRM_DELETE_ALL_RESPONSE_JSON = """
+            {
+              "request_id": "gateway-delete-all-001",
+              "type": "action_result",
+              "action": "delete_all_tables",
+              "success": true,
+              "message": "已删除全部 3 张数据表",
+              "deleted_tables": ["工单表_A区", "工单表_B区", "工单表_C区"],
+              "meta": {"warnings": []}
+            }
+            """;
+
     private static final byte[] DOWNLOAD_BYTES = new byte[256 * 1024];
 
     static {
@@ -143,6 +155,10 @@ class AssistantGatewayIntegrationTest {
             new AtomicReference<>();
     private static final AtomicReference<String> FORWARDED_UPLOAD_BODY = new AtomicReference<>();
     private static final AtomicReference<String> FORWARDED_PREVIEW_QUERY =
+            new AtomicReference<>();
+    private static final AtomicReference<String> FORWARDED_CONFIRM_BODY =
+            new AtomicReference<>();
+    private static final AtomicReference<String> FORWARDED_CONFIRM_REQUEST_ID =
             new AtomicReference<>();
     private static final HttpServer UPSTREAM;
     private static final ExecutorService UPSTREAM_EXECUTOR =
@@ -215,6 +231,16 @@ class AssistantGatewayIntegrationTest {
             UPSTREAM.createContext("/api/v1/assistant/tables/preview", exchange -> {
                 FORWARDED_PREVIEW_QUERY.set(exchange.getRequestURI().getRawQuery());
                 sendJson(exchange, 200, PREVIEW_RESPONSE_JSON);
+            });
+            UPSTREAM.createContext("/api/v1/assistant/tables/delete-all/confirm", exchange -> {
+                FORWARDED_CONFIRM_REQUEST_ID.set(
+                        exchange.getRequestHeaders().getFirst("X-Request-Id")
+                );
+                FORWARDED_CONFIRM_BODY.set(new String(
+                        exchange.getRequestBody().readAllBytes(),
+                        StandardCharsets.UTF_8
+                ));
+                sendJson(exchange, 200, CONFIRM_DELETE_ALL_RESPONSE_JSON);
             });
             UPSTREAM.createContext("/api/v1/assistant/tables", exchange ->
                     sendJson(exchange, 200, TABLES_RESPONSE_JSON));
@@ -563,6 +589,52 @@ class AssistantGatewayIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("DOWNLOAD_NAME_INVALID");
+    }
+
+    @Test
+    void forwardsDeleteAllConfirmationTokenAndRelaysResult() throws Exception {
+        String token = "confirm-token-0123456789abcdefghijklmnop";
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Request-Id", "gateway-delete-all-001");
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/v1/assistant/tables/delete-all/confirm",
+                HttpMethod.POST,
+                new HttpEntity<>(Map.of("confirmation_token", token), headers),
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(FORWARDED_CONFIRM_REQUEST_ID.get()).isEqualTo("gateway-delete-all-001");
+        // 网关只透传令牌，不改写字段名，也不把令牌写进响应。
+        assertThat(FORWARDED_CONFIRM_BODY.get())
+                .contains("\"confirmation_token\":\"" + token + "\"");
+
+        JsonNode body = objectMapper.readTree(response.getBody());
+        assertThat(body.path("type").asText()).isEqualTo("action_result");
+        assertThat(body.path("action").asText()).isEqualTo("delete_all_tables");
+        assertThat(body.path("success").asBoolean()).isTrue();
+        assertThat(body.path("deleted_tables")).hasSize(3);
+        assertThat(response.getBody()).doesNotContain(token);
+    }
+
+    @Test
+    void rejectsShortConfirmationTokenBeforeCallingAgent() {
+        FORWARDED_CONFIRM_BODY.set(null);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/v1/assistant/tables/delete-all/confirm",
+                HttpMethod.POST,
+                new HttpEntity<>(Map.of("confirmation_token", "too-short"), headers),
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("REQUEST_VALIDATION_FAILED");
+        assertThat(FORWARDED_CONFIRM_BODY.get()).isNull();
     }
 
     @Test

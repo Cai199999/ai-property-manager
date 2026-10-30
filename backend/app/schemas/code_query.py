@@ -144,9 +144,34 @@ class ActionResultResponse(BaseModel):
 
     request_id: str
     type: Literal["action_result"] = "action_result"
-    action: Literal["delete_table"] = "delete_table"
+    action: Literal["delete_table", "delete_all_tables", "none"] = "delete_table"
     success: bool = True
     message: str
     deleted_table: str | None = None
+    deleted_tables: list[str] = Field(default_factory=list)
     remaining_tables: list[str] = Field(default_factory=list)
     candidates: list[str] = Field(default_factory=list)
+
+
+class ConfirmationRequiredResponse(BaseModel):
+    """高危操作确认响应；此阶段绝不能执行任何删除。"""
+
+    request_id: str
+    type: Literal["confirmation_required"] = "confirmation_required"
+    action: Literal["delete_all_tables"] = "delete_all_tables"
+    message: str
+    confirmation_token: str
+    expires_at: datetime
+    table_count: int = Field(ge=0)
+
+
+class DeleteAllConfirmationRequest(BaseModel):
+    """删除全部表的二次确认请求。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    confirmation_token: str = Field(
+        min_length=20,
+        max_length=256,
+        description="/query/code 返回的一次性确认令牌",
+    )

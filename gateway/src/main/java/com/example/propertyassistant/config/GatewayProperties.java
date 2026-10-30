@@ -23,6 +23,7 @@ public record GatewayProperties(
         @NotBlank String tablesPath,
         @NotBlank String previewPath,
         @NotBlank String uploadPath,
+        @NotBlank String deleteAllConfirmPath,
         @NotBlank String downloadPath,
         @NotNull Duration connectTimeout,
         @NotNull Duration readTimeout,

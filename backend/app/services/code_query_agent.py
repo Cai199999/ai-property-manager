@@ -31,6 +31,7 @@ from app.schemas.code_query import (
     CodeQueryMeta,
     CodeQueryResponse,
     CodeResult,
+    ConfirmationRequiredResponse,
     LLMInfo,
     QueryTableInfo,
     ResultColumn,
@@ -59,16 +60,16 @@ from app.services.code_safety import (
     sanitize_error_text,
     validate_generated_code,
 )
+from app.services.confirmation_store import DeleteAllConfirmationStore
 from app.services.deepseek_extractor import LLMTimeRangeExtractor
 from app.services.llm_provider import LLMProviderFactory, ResolvedProvider
+from app.services.query_understanding import (
+    ExtractorQueryUnderstanding,
+    QueryUnderstanding,
+    QueryUnderstandingService,
+)
 from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
-from app.services.table_delete_intent import (
-    DeleteTableIntent,
-    DeleteTableIssue,
-    detect_delete_intent,
-    looks_like_table_delete,
-)
 from app.services.table_deletion import TableDeletionService
 from app.services.time_range import TimeExtraction
 from app.services.word_exporter import (
@@ -111,6 +112,8 @@ class CodeQueryAgent:
         word_exporter: WordReportExporter | None = None,
         report_summarizer: LLMReportSummarizer | None = None,
         provider_factory: LLMProviderFactory | None = None,
+        understanding: QueryUnderstandingService | None = None,
+        confirmation_store: DeleteAllConfirmationStore | None = None,
     ) -> None:
         self._settings = settings
         self._extractor = extractor
@@ -133,68 +136,229 @@ class CodeQueryAgent:
             if self._table_catalog is not None
             else None
         )
+        # 未显式注入时使用旧时间解析器适配器，保证既有测试与自定义注入
+        # 兼容；生产入口在 main.create_app 中注入 LLMQueryUnderstanding。
+        self._understanding = understanding or ExtractorQueryUnderstanding(extractor)
+        self._confirmation_store = confirmation_store or DeleteAllConfirmationStore(
+            settings.delete_confirmation_ttl_seconds,
+            tz=settings.tz,
+        )
 
-    async def _try_delete_table(
-        self,
-        message: str,
-        request_id: str,
-    ) -> ActionResultResponse | None:
-        """识别并执行删表意图；非删表请求返回 None 继续原流程。"""
-        if self._table_catalog is None or self._table_deletion is None:
-            return None
-        if not looks_like_table_delete(message):
-            return None
-
+    async def _table_context(self) -> tuple[TableSnapshot | None, list[str]]:
+        """扫描当前表名，供大模型做语义意图分类。"""
+        if self._table_catalog is None:
+            return None, []
         try:
             snapshot = await anyio.to_thread.run_sync(self._table_catalog.scan)
-        except Exception as exc:  # noqa: BLE001 - 扫描失败时交回原查询流程
-            logger.warning("删表意图识别时扫描目录失败: %s", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - 扫描失败不阻断普通查询
+            logger.warning("意图识别时扫描目录失败: %s", type(exc).__name__)
+            return None, []
+        return snapshot, [table.name for table in snapshot.tables]
+
+    async def _handle_intent(
+        self,
+        understanding: QueryUnderstanding,
+        snapshot: TableSnapshot | None,
+        table_names: list[str],
+        request_id: str,
+    ) -> CodeQueryResponse | ActionResultResponse | ConfirmationRequiredResponse | None:
+        """处理删表意图；query 返回 None 继续原查询流程。"""
+        if understanding.intent == "query":
             return None
 
-        current_names = [table.name for table in snapshot.tables]
-        intent = detect_delete_intent(message, current_names)
-        if intent is None:
-            return None
-
-        if isinstance(intent, DeleteTableIssue):
-            return ActionResultResponse(
+        if understanding.intent == "ambiguous_delete":
+            reason = understanding.reason or "无法确定要删除的数据表，请明确指定完整表名"
+            return self._action_failure(
                 request_id=request_id,
-                success=False,
-                message=intent.message,
-                remaining_tables=current_names,
-                candidates=list(intent.candidates),
+                message=reason,
+                action="none",
+                remaining_tables=table_names,
+                candidates=table_names,
             )
 
-        assert isinstance(intent, DeleteTableIntent)
+        if self._table_deletion is None or self._table_catalog is None:
+            return self._action_failure(
+                request_id=request_id,
+                message="多表数据目录未启用，无法删除数据表",
+                action=(
+                    "delete_all_tables"
+                    if understanding.intent == "delete_all_tables"
+                    else "delete_table"
+                ),
+                remaining_tables=table_names,
+            )
+
+        if understanding.intent == "delete_all_tables":
+            return await self._request_delete_all(request_id)
+
+        table_name = (understanding.table_name or "").strip()
+        # 路径形态在查表前直接拦截，模型输出同样不能绕过工作区白名单。
+        try:
+            safe_name = self._table_deletion.validate_table_name(table_name)
+        except TableDeletionError as exc:
+            return self._action_failure(
+                request_id=request_id,
+                message=exc.message,
+                action="delete_table",
+                remaining_tables=table_names,
+            )
+
+        if snapshot is None or safe_name not in snapshot.table_map():
+            return self._action_failure(
+                request_id=request_id,
+                message=f"未找到数据表：{safe_name}，请从当前数据表中选择",
+                action="delete_table",
+                remaining_tables=table_names,
+                candidates=table_names,
+            )
+
         try:
             result = await anyio.to_thread.run_sync(
-                partial(self._table_deletion.delete_table_tool, intent.table_name)
+                partial(self._table_deletion.delete_table_tool, safe_name)
             )
         except (TableNotFoundError, TableDeletionError, TableImportUnavailableError) as exc:
             logger.info(
                 "删表失败 request_id=%s table=%s error=%s",
                 request_id,
-                intent.table_name,
+                safe_name,
                 exc.code,
             )
-            return ActionResultResponse(
+            return self._action_failure(
                 request_id=request_id,
-                success=False,
                 message=exc.message,
-                remaining_tables=current_names,
+                action="delete_table",
+                remaining_tables=table_names,
             )
 
-        logger.info(
-            "删表成功 request_id=%s table=%s",
-            request_id,
-            result.deleted_table,
-        )
+        logger.info("删表成功 request_id=%s table=%s", request_id, result.deleted_table)
         return ActionResultResponse(
             request_id=request_id,
+            action="delete_table",
             success=True,
             message=f"已成功删除数据表：{result.deleted_table}",
             deleted_table=result.deleted_table,
             remaining_tables=list(result.remaining_tables),
+        )
+
+    async def _request_delete_all(
+        self,
+        request_id: str,
+    ) -> ActionResultResponse | ConfirmationRequiredResponse:
+        """删除全部表不立即执行，先签发绑定当前表集合的确认令牌。"""
+        assert self._table_deletion is not None
+        try:
+            files, fingerprint = await anyio.to_thread.run_sync(
+                self._table_deletion.table_set_fingerprint
+            )
+        except (TableDeletionError, TableImportUnavailableError) as exc:
+            return self._action_failure(
+                request_id=request_id,
+                message=exc.message,
+                action="delete_all_tables",
+            )
+
+        if not files:
+            return self._action_failure(
+                request_id=request_id,
+                message="当前没有可删除的数据表",
+                action="delete_all_tables",
+            )
+
+        confirmation = self._confirmation_store.issue(
+            fingerprint=fingerprint,
+            table_count=len(files),
+        )
+        logger.info(
+            "删除全部表等待确认 request_id=%s table_count=%s",
+            request_id,
+            len(files),
+        )
+        return ConfirmationRequiredResponse(
+            request_id=request_id,
+            message="检测到您要删除所有数据表，此操作不可逆，是否确认？",
+            confirmation_token=confirmation.token,
+            expires_at=confirmation.expires_at,
+            table_count=confirmation.table_count,
+        )
+
+    async def confirm_delete_all(
+        self,
+        *,
+        confirmation_token: str,
+        request_id: str,
+    ) -> ActionResultResponse:
+        """校验一次性令牌后清空工作区内的全部受管数据表。"""
+        if self._table_deletion is None or self._table_catalog is None:
+            return self._action_failure(
+                request_id=request_id,
+                message="多表数据目录未启用，无法删除数据表",
+                action="delete_all_tables",
+            )
+
+        try:
+            files, fingerprint = await anyio.to_thread.run_sync(
+                self._table_deletion.table_set_fingerprint
+            )
+            outcome = self._confirmation_store.consume(
+                confirmation_token,
+                fingerprint=fingerprint,
+            )
+            if not outcome.ok:
+                return self._action_failure(
+                    request_id=request_id,
+                    message=outcome.error or "确认信息无效，请重新发起删除全部表",
+                    action="delete_all_tables",
+                    remaining_tables=[path.removesuffix(".xlsx") for path in files],
+                )
+
+            result = await anyio.to_thread.run_sync(
+                partial(
+                    self._table_deletion.delete_all_tables,
+                    expected_fingerprint=fingerprint,
+                )
+            )
+        except (TableDeletionError, TableImportUnavailableError) as exc:
+            logger.info(
+                "删除全部表失败 request_id=%s error=%s",
+                request_id,
+                exc.code,
+            )
+            return self._action_failure(
+                request_id=request_id,
+                message=exc.message,
+                action="delete_all_tables",
+            )
+
+        logger.info(
+            "删除全部表成功 request_id=%s files=%s",
+            request_id,
+            len(result.deleted_files),
+        )
+        return ActionResultResponse(
+            request_id=request_id,
+            action="delete_all_tables",
+            success=True,
+            message=f"已成功删除全部数据表（{len(result.deleted_files)} 张）",
+            deleted_tables=list(result.deleted_tables),
+            remaining_tables=list(result.remaining_tables),
+        )
+
+    @staticmethod
+    def _action_failure(
+        *,
+        request_id: str,
+        message: str,
+        action: str,
+        remaining_tables: list[str] | None = None,
+        candidates: list[str] | None = None,
+    ) -> ActionResultResponse:
+        return ActionResultResponse(
+            request_id=request_id,
+            action=action,  # type: ignore[arg-type]
+            success=False,
+            message=message,
+            remaining_tables=list(remaining_tables or []),
+            candidates=list(candidates or []),
         )
 
     async def handle(
@@ -206,21 +370,7 @@ class CodeQueryAgent:
         provider_type: str | None = None,
         user_api_key: str | SecretStr | None = None,
         model_name: str | None = None,
-    ) -> CodeQueryResponse | ActionResultResponse:
-        # 删除表是确定性工具调用：先于大模型与沙箱判断，避免用户输入
-        # “删除工单表_A区”时被送去生成 Pandas 代码。
-        action = await self._try_delete_table(message, request_id)
-        if action is not None:
-            return action
-
-        if not self._settings.code_query_enabled:
-            raise CodeGenerationError(
-                "生成式代码查询未启用",
-                details={"code_query_enabled": False},
-            )
-        if not self._executor.available:
-            raise CodeSandboxUnavailableError()
-
+    ) -> CodeQueryResponse | ActionResultResponse | ConfirmationRequiredResponse:
         started_at = perf_counter()
         deadline = monotonic() + self._settings.code_total_timeout_seconds
 
@@ -233,9 +383,41 @@ class CodeQueryAgent:
             model_name=model_name,
         )
 
+        # 先做语义理解：删除意图必须使用大模型识别，不再依赖正则匹配。
+        snapshot, table_names = await self._table_context()
         try:
-            extraction = await self._extractor.extract(message, provider=provider)
+            understanding = await self._understanding.understand(
+                message,
+                table_names=table_names,
+                provider=provider,
+            )
         except TimeRangeParseError:
+            # 无时间的普通汇总（如“汇总所有区域”）交给目录默认区间兜底；
+            # 删除意图不会走到这里。
+            understanding = QueryUnderstanding(
+                intent="query",
+                reason="未识别到时间范围",
+            )
+
+        action = await self._handle_intent(
+            understanding,
+            snapshot,
+            table_names,
+            request_id,
+        )
+        if action is not None:
+            return action
+
+        if not self._settings.code_query_enabled:
+            raise CodeGenerationError(
+                "生成式代码查询未启用",
+                details={"code_query_enabled": False},
+            )
+        if not self._executor.available:
+            raise CodeSandboxUnavailableError()
+
+        extraction = understanding.time_extraction
+        if extraction is None:
             # 多文件汇总（如“汇总所有区域的总工单量和总金额”）往往不带时间。
             # 目录模式有真实数据范围，可默认覆盖全部工单；RPA 单表模式
             # 仍要求用户明确时间，避免隐式放大查询窗口。
@@ -248,7 +430,7 @@ class CodeQueryAgent:
         )
         messages = build_initial_messages(message, source.profile)
 
-        warnings = list(extraction.warnings) + list(source.warnings)
+        warnings = list(understanding.warnings) + list(extraction.warnings) + list(source.warnings)
         sample_warning = _time_diff_sample_warning(source.frames, message)
         if sample_warning:
             warnings.append(sample_warning)

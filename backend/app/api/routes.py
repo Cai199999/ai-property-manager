@@ -18,7 +18,13 @@ from app.core.exceptions import (
     TablePreviewUnavailableError,
 )
 from app.schemas.assistant import AssistantQueryRequest, AssistantQueryResponse
-from app.schemas.code_query import ActionResultResponse, CodeQueryRequest, CodeQueryResponse
+from app.schemas.code_query import (
+    ActionResultResponse,
+    CodeQueryRequest,
+    CodeQueryResponse,
+    ConfirmationRequiredResponse,
+    DeleteAllConfirmationRequest,
+)
 from app.schemas.tables import (
     TableCatalogResponse,
     TableColumnInfo,
@@ -59,13 +65,13 @@ async def query_assistant(
 
 @router.post(
     "/query/code",
-    response_model=CodeQueryResponse | ActionResultResponse,
+    response_model=CodeQueryResponse | ActionResultResponse | ConfirmationRequiredResponse,
     summary="自然语言生成 Pandas 代码并返回通用结果表",
 )
 async def query_with_generated_code(
     payload: CodeQueryRequest,
     request: Request,
-) -> CodeQueryResponse | ActionResultResponse:
+) -> CodeQueryResponse | ActionResultResponse | ConfirmationRequiredResponse:
     return await request.app.state.code_query_agent.handle(
         message=payload.message,
         request_id=get_request_id(request),
@@ -73,6 +79,22 @@ async def query_with_generated_code(
         provider_type=payload.provider_type,
         user_api_key=payload.user_api_key,
         model_name=payload.model_name,
+    )
+
+
+@router.post(
+    "/tables/delete-all/confirm",
+    response_model=ActionResultResponse,
+    summary="确认并执行删除全部数据表",
+)
+async def confirm_delete_all_tables(
+    payload: DeleteAllConfirmationRequest,
+    request: Request,
+) -> ActionResultResponse:
+    """只有携带 /query/code 签发的一次性令牌才能执行清空。"""
+    return await request.app.state.code_query_agent.confirm_delete_all(
+        confirmation_token=payload.confirmation_token,
+        request_id=get_request_id(request),
     )
 
 

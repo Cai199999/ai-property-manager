@@ -29,6 +29,11 @@ from app.services.code_generator import LLMCodeGenerator
 from app.services.code_query_agent import CodeQueryAgent
 from app.services.deepseek_extractor import LLMTimeRangeExtractor
 from app.services.llm_provider import LLMProviderFactory, SUPPORTED_PROVIDERS
+from app.services.query_understanding import (
+    ExtractorQueryUnderstanding,
+    LLMQueryUnderstanding,
+    QueryUnderstandingService,
+)
 from app.services.report_export import ExcelReportExporter
 from app.services.word_exporter import LLMReportSummarizer, WordReportExporter
 from app.services.table_catalog import TableCatalog
@@ -46,6 +51,7 @@ def create_app(
     code_executor: CodeExecutor | None = None,
     table_catalog: TableCatalog | None = None,
     provider_factory: LLMProviderFactory | None = None,
+    query_understanding: QueryUnderstandingService | None = None,
 ) -> FastAPI:
     """应用工厂，便于测试注入替身而不污染全局依赖。"""
     resolved_settings = settings or Settings()
@@ -63,6 +69,17 @@ def create_app(
         resolved_settings,
         provider_factory=resolved_providers,
     )
+    # 生产链路使用一次 LLM 调用同时判定意图与时间；显式注入 extractor
+    # 的旧测试/自定义入口继续走时间解析适配器，避免破坏兼容性。
+    if query_understanding is not None:
+        resolved_understanding = query_understanding
+    elif extractor is not None:
+        resolved_understanding = ExtractorQueryUnderstanding(resolved_extractor)
+    else:
+        resolved_understanding = LLMQueryUnderstanding(
+            resolved_settings,
+            provider_factory=resolved_providers,
+        )
     resolved_code_generator = code_generator or LLMCodeGenerator(
         resolved_settings,
         provider_factory=resolved_providers,
@@ -95,6 +112,7 @@ def create_app(
         word_exporter=word_exporter,
         report_summarizer=report_summarizer,
         provider_factory=resolved_providers,
+        understanding=resolved_understanding,
     )
 
     @asynccontextmanager
@@ -111,6 +129,9 @@ def create_app(
         # 但仍保留以兼容测试中注入的独立实例。
         await resolved_providers.aclose()
         await resolved_extractor.aclose()
+        close_understanding = getattr(resolved_understanding, "aclose", None)
+        if close_understanding is not None:
+            await close_understanding()
         await report_summarizer.aclose()
         close_generator = getattr(resolved_code_generator, "aclose", None)
         if close_generator is not None:

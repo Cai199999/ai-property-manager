@@ -5,6 +5,7 @@ import com.example.propertyassistant.client.AgentGatewayService;
 import com.example.propertyassistant.config.RequestIdFilter;
 import com.example.propertyassistant.dto.AssistantQueryRequest;
 import com.example.propertyassistant.dto.CodeQueryRequest;
+import com.example.propertyassistant.dto.DeleteAllConfirmationRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -59,6 +60,18 @@ public class AssistantGatewayController {
             HttpServletRequest servletRequest
     ) {
         JsonNode response = agentGatewayService.codeQuery(request, requestId(servletRequest));
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/tables/delete-all/confirm")
+    public ResponseEntity<JsonNode> confirmDeleteAll(
+            @Valid @RequestBody DeleteAllConfirmationRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        JsonNode response = agentGatewayService.confirmDeleteAll(
+                request,
+                requestId(servletRequest)
+        );
         return ResponseEntity.ok(response);
     }
 

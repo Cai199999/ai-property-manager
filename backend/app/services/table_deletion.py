@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -34,6 +35,16 @@ class TableDeletionResult:
     deleted_table: str
     deleted_files: tuple[str, ...]
     remaining_tables: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TableBulkDeletionResult:
+    """删除全部表的结果；文件名不暴露绝对路径。"""
+
+    deleted_tables: tuple[str, ...]
+    deleted_files: tuple[str, ...]
+    remaining_tables: tuple[str, ...]
+    fingerprint: str
 
 
 class TableDeletionService:
@@ -163,6 +174,110 @@ class TableDeletionService:
         """兼容旧调用名；实际执行 ``delete_table_tool``。"""
         return self.delete_table_tool(table_name)
 
+    def table_set_fingerprint(self) -> tuple[tuple[str, ...], str]:
+        """返回当前可删除文件与指纹，供确认令牌绑定。
+
+        指纹只使用文件名、mtime 与大小，不读取文件内容；目录在确认期间
+        发生任何新增/删除/替换都会变化，从而拒绝过期确认。
+        """
+        if not self.enabled or self._catalog is None:
+            raise TableImportUnavailableError()
+        with self._catalog.operation_lock:
+            files = self._workspace_excel_files()
+            digest = hashlib.sha256()
+            for path in files:
+                stat = path.stat()
+                digest.update(f"{path.name}\0{stat.st_mtime_ns}\0{stat.st_size}\n".encode("utf-8"))
+            return tuple(path.name for path in files), digest.hexdigest()
+
+    def delete_all_tables(
+        self,
+        *,
+        expected_fingerprint: str | None = None,
+    ) -> TableBulkDeletionResult:
+        """删除工作区内全部受管 Excel，并清空表目录元数据。
+
+        安全边界与单表删除一致：每个文件都先 ``resolve()`` 并做工作区路径
+        前缀校验；工作区外软链接跳过；不删除目录本身，不使用 ``rmtree``。
+        """
+        if not self.enabled or self._catalog is None:
+            raise TableImportUnavailableError()
+
+        directory = self._workspace_root()
+        with self._catalog.operation_lock:
+            files = self._workspace_excel_files()
+            fingerprint = self._fingerprint_files(files)
+            if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+                raise TableDeletionError("数据表在确认前已发生变化，请重新发起删除全部表")
+
+            snapshot = self._catalog.scan()
+            names_by_file = {table.file_name: table.name for table in snapshot.tables}
+
+            index_path = directory / UPLOAD_INDEX_NAME
+            manifest_path = directory / TABLE_MANIFEST_NAME
+            index_payload = self._load_json_object(index_path)
+            manifest_payload = self._load_json_object(manifest_path)
+
+            original_index = self._serialize_json(index_payload)
+            original_manifest = self._serialize_json(manifest_payload)
+
+            index_changed = self._clear_upload_index(index_payload)
+            manifest_changed = self._clear_manifest(manifest_payload)
+            deleted_names = {path.name for path in files}
+
+            quarantined: list[tuple[Path, Path]] = []
+            try:
+                for path in files:
+                    quarantine = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.deleting")
+                    path.replace(quarantine)
+                    quarantined.append((path, quarantine))
+
+                if index_changed:
+                    self._write_json_object(index_path, index_payload or {})
+                if manifest_changed:
+                    self._write_json_object(manifest_path, manifest_payload or {})
+            except (OSError, TableDeletionError) as exc:
+                for path, quarantine in reversed(quarantined):
+                    try:
+                        quarantine.replace(path)
+                    except OSError:
+                        logger.warning("回滚删除全部表文件失败 file=%s", path.name)
+                self._restore_json(index_path, original_index)
+                self._restore_json(manifest_path, original_manifest)
+                if isinstance(exc, TableDeletionError):
+                    raise
+                logger.warning("删除全部数据表失败 error=%s", type(exc).__name__)
+                raise TableDeletionError() from exc
+
+            for _, quarantine in quarantined:
+                try:
+                    quarantine.unlink()
+                except OSError:
+                    logger.warning("清理隔离文件失败 file=%s", quarantine.name)
+
+            self._catalog.invalidate()
+            try:
+                remaining = tuple(table.name for table in self._catalog.scan().tables)
+            except Exception as exc:  # noqa: BLE001 - 删除已完成，重扫失败不应反报失败
+                logger.warning("删除全部表后扫描目录失败: %s", type(exc).__name__)
+                remaining = ()
+
+        deleted_tables = tuple(
+            sorted(names_by_file.get(name, Path(name).stem) for name in deleted_names)
+        )
+        logger.info("已删除全部数据表 files=%s", len(files))
+        return TableBulkDeletionResult(
+            deleted_tables=deleted_tables,
+            deleted_files=tuple(sorted(deleted_names)),
+            remaining_tables=remaining,
+            fingerprint=fingerprint,
+        )
+
+    @classmethod
+    def validate_table_name(cls, table_name: str) -> str:
+        """公开的表名白名单校验，供自然语言入口在查表前先行拦截。"""
+        return cls._validate_table_name(table_name)
+
     def _workspace_root(self) -> Path:
         """工作区绝对路径；后续所有待删文件都必须以它为前缀。"""
         return self._directory.resolve()
@@ -207,6 +322,62 @@ class TableDeletionService:
         if not resolved.is_file():
             raise TableDeletionError("数据表文件不存在，已取消删除")
         return resolved
+
+    def _workspace_excel_files(self) -> list[Path]:
+        """枚举工作区内可安全删除的 .xlsx，跳过越界软链接与临时文件。"""
+        directory = self._workspace_root()
+        if not directory.is_dir():
+            return []
+
+        files: list[Path] = []
+        seen: set[Path] = set()
+        for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+            if path.name.startswith("~$") or path.suffix.lower() != ".xlsx":
+                continue
+            try:
+                resolved = self._resolve_workspace_file(path)
+            except TableDeletionError:
+                logger.warning("跳过工作区外或异常路径 file=%s", path.name)
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(resolved)
+        return files
+
+    @staticmethod
+    def _fingerprint_files(files: list[Path]) -> str:
+        digest = hashlib.sha256()
+        for path in files:
+            stat = path.stat()
+            digest.update(f"{path.name}\0{stat.st_mtime_ns}\0{stat.st_size}\n".encode("utf-8"))
+        return digest.hexdigest()
+
+    @staticmethod
+    def _serialize_json(payload: dict[str, Any] | None) -> str | None:
+        if payload is None:
+            return None
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _clear_upload_index(payload: dict[str, Any] | None) -> bool:
+        if payload is None:
+            return False
+        changed = bool(payload)
+        payload.clear()
+        return changed
+
+    @staticmethod
+    def _clear_manifest(payload: dict[str, Any] | None) -> bool:
+        if payload is None:
+            return False
+        changed = payload.get("tables") not in (None, []) or payload.get("schema_groups") not in (
+            None,
+            [],
+        )
+        payload["tables"] = []
+        payload["schema_groups"] = []
+        return changed
 
     def _same_content_files(self, target: Path) -> list[Path]:
         """查找与目标文件 MD5 相同的所有工作区内 .xlsx。"""

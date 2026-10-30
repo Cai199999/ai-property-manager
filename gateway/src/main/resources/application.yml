@@ -27,6 +27,7 @@ gateway:
     tables-path: ${FASTAPI_TABLES_PATH:/api/v1/assistant/tables}
     preview-path: ${FASTAPI_PREVIEW_PATH:/api/v1/assistant/tables/preview}
     upload-path: ${FASTAPI_UPLOAD_PATH:/api/v1/assistant/tables/upload}
+    delete-all-confirm-path: ${FASTAPI_DELETE_ALL_CONFIRM_PATH:/api/v1/assistant/tables/delete-all/confirm}
     download-path: ${FASTAPI_DOWNLOAD_PATH:/api/v1/assistant/download}
     connect-timeout: 3s
     read-timeout: 60s
