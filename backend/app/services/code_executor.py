@@ -65,36 +65,45 @@ class CodeExecutor:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._bwrap = shutil.which("bwrap")
+        self._windows = sys.platform == "win32"
+        # Windows 上 bwrap 不可能存在，直接跳过探测；也避免 which() 被
+        # 某些安全软件拦截时产生额外开销或误判。
+        self._bwrap = None if self._windows else shutil.which("bwrap")
         self._frozen = bool(getattr(sys, "frozen", False))
         self._venv_root = Path(sys.prefix).resolve()
-        # venv 解释器位置随平台不同：POSIX 为 bin/，Windows 为 Scripts/。
-        python_candidates = (
-            self._venv_root / "bin" / "python",
-            self._venv_root / "bin" / "python3",
-            self._venv_root / "Scripts" / "python.exe",
-            self._venv_root / "Scripts" / "python3.exe",
-        )
-        self._python = next(
-            (candidate for candidate in python_candidates if candidate.exists()),
-            python_candidates[0],
-        )
+        if self._windows:
+            # Windows 下始终使用当前解释器：全局安装、conda、嵌入式 Python
+            # 的 Scripts 目录不一定包含 python.exe，按 sys.prefix 猜测会把
+            # 正常环境误判为“沙箱不可用”（线上 503 的根因）。
+            self._python = Path(sys.executable)
+        else:
+            python_candidates = (
+                self._venv_root / "bin" / "python",
+                self._venv_root / "bin" / "python3",
+            )
+            self._python = next(
+                (candidate for candidate in python_candidates if candidate.exists()),
+                python_candidates[0],
+            )
         self._runner = Path(__file__).resolve().parents[1] / "sandbox" / "runner.py"
         self._mode = self._resolve_mode()
         if self._mode == "subprocess":
-            logger.warning("未找到 bwrap，代码执行降级为受限子进程模式（仅依赖 AST 安全校验）")
+            reason = "Windows 平台无 bwrap" if self._windows else "未找到 bwrap"
+            logger.warning("%s，代码执行降级为受限子进程模式（仅依赖 AST 安全校验）", reason)
 
     def _resolve_mode(self) -> str:
         """决定执行方式：bwrap 隔离 / 受限子进程 / 不可用。
 
         - ``CODE_SANDBOX_MODE=disabled``：显式关闭，不执行任何生成代码。
-        - 找到 bwrap：使用命名空间隔离。
-        - 找不到 bwrap：降级为独立子进程（Windows 绿色版的默认路径）。
+        - Windows：跳过 bwrap 探测，直接使用当前解释器的子进程模式。
+        - 其他平台：找到 bwrap 用命名空间隔离，找不到则降级为子进程。
         """
         if self._settings.code_sandbox_mode != "bwrap":
             return "unavailable"
         if not self._interpreter_ready():
             return "unavailable"
+        if self._windows:
+            return "subprocess"
         if self._bwrap:
             return "bwrap"
         return "subprocess"
@@ -103,6 +112,9 @@ class CodeExecutor:
         """解释器与 runner 是否可用；打包成 exe 后两者由 PyInstaller 内置。"""
         if self._frozen:
             return True
+        if self._windows:
+            # 当前进程能运行，说明 sys.executable 一定有效。
+            return bool(sys.executable)
         return self._python.exists() and self._runner.exists()
 
     @property
@@ -176,22 +188,52 @@ class CodeExecutor:
         )
 
     def _run(self, payload: bytes, *, timeout: float) -> dict[str, Any]:
-        command, environment, workdir = self._build_launch()
         logger.info(
-            "启动代码沙箱 mode=%s timeout=%.1fs venv=%s",
+            "启动代码沙箱 mode=%s platform=%s timeout=%.1fs",
             self._mode,
+            sys.platform,
             timeout,
-            self._venv_root.name,
         )
+        if self._mode == "bwrap":
+            stdout, stderr, returncode = self._run_bwrap(payload, timeout=timeout)
+        else:
+            stdout, stderr, returncode = self._run_direct(payload, timeout=timeout)
+        return self._parse_result(stdout, stderr, returncode)
+
+    def _run_direct(self, payload: bytes, *, timeout: float) -> tuple[bytes, bytes, int]:
+        """无 bwrap 时用 subprocess.run 执行，超时由 Python 侧强制终止。
+
+        Windows 的默认路径：使用 ``sys.executable`` 启动独立子进程，
+        代码不会进入 FastAPI 进程。
+        """
+        workdir = self._make_workdir()
+        try:
+            completed = subprocess.run(
+                self._build_direct_command(),
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                env=self._direct_environment(),
+                cwd=workdir,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SandboxTimeoutError(f"代码执行超过 {timeout:.1f} 秒") from exc
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        return completed.stdout, completed.stderr, completed.returncode
+
+    def _run_bwrap(self, payload: bytes, *, timeout: float) -> tuple[bytes, bytes, int]:
+        """bwrap 模式需要进程组强杀，因此保留 Popen。"""
+        command = self._build_bwrap_command()
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=environment,
-            cwd=workdir,
-            # Windows 不支持 start_new_session；POSIX 下用于整组强杀。
-            start_new_session=os.name != "nt",
+            env={},
+            start_new_session=True,
         )
         try:
             stdout, stderr = process.communicate(input=payload, timeout=timeout)
@@ -199,15 +241,15 @@ class CodeExecutor:
             _kill_process_group(process)
             process.communicate()
             raise SandboxTimeoutError(f"代码执行超过 {timeout:.1f} 秒") from exc
-        finally:
-            if workdir is not None:
-                shutil.rmtree(workdir, ignore_errors=True)
+        return stdout, stderr, process.returncode
 
-        if process.returncode != 0 and not stdout.strip():
+    def _parse_result(self, stdout: bytes, stderr: bytes, returncode: int) -> dict[str, Any]:
+        """解析 runner 的 JSON 输出，异常信息统一脱敏后上抛。"""
+        if returncode != 0 and not stdout.strip():
             detail = sanitize_error_text(stderr.decode("utf-8", errors="replace"))
-            if "bwrap:" in detail or "namespace" in detail.lower():
+            if self._mode == "bwrap" and ("bwrap:" in detail or "namespace" in detail.lower()):
                 raise SandboxUnavailableError(f"沙箱启动失败: {detail}")
-            raise SandboxExecutionError(f"沙箱进程异常退出: {detail or process.returncode}")
+            raise SandboxExecutionError(f"沙箱进程异常退出: {detail or returncode}")
 
         try:
             payload_result = json.loads(stdout.decode("utf-8"))
@@ -229,18 +271,6 @@ class CodeExecutor:
 
         return _validate_result(payload_result, self._settings)
 
-    def _build_launch(self) -> tuple[list[str], dict[str, str], str | None]:
-        """返回 (命令, 环境变量, 工作目录)。
-
-        bwrap 模式自己处理命名空间、临时目录和环境变量；降级模式则在这
-        一层显式构造一个干净的环境与临时工作目录。
-        """
-        if self._mode == "bwrap":
-            return self._build_bwrap_command(), {}, None
-        if self._mode == "subprocess":
-            return self._build_direct_command(), self._direct_environment(), self._make_workdir()
-        raise SandboxUnavailableError("未找到 bwrap 或虚拟环境解释器，拒绝执行生成代码")
-
     def _build_direct_command(self) -> list[str]:
         """无 bwrap 时的子进程命令。
 
@@ -251,6 +281,9 @@ class CodeExecutor:
         """
         if self._frozen:
             return [sys.executable, "--sandbox-runner"]
+        if self._windows:
+            # 始终用当前解释器，Source 版也可能是全局/conda 安装。
+            return [sys.executable, "-I", "-B", str(self._runner)]
         return [str(self._python), "-I", "-B", str(self._runner)]
 
     @staticmethod

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pandas as pd
 import pytest
 from pydantic import SecretStr
@@ -38,6 +40,26 @@ def test_falls_back_to_subprocess_when_bwrap_missing(monkeypatch: pytest.MonkeyP
     assert result.rows == [{"合计": 6.0}]
     assert result.row_count == 1
     assert any("bwrap" in warning for warning in result.warnings)
+
+
+def test_windows_skips_bwrap_probe_and_uses_current_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows 不应探测 bwrap，也不应因 sys.prefix 布局不同而被判为不可用。"""
+
+    def _fail_probe(_name: str) -> str:
+        pytest.fail("Windows 平台不应调用 shutil.which('bwrap')")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("app.services.code_executor.shutil.which", _fail_probe)
+
+    executor = CodeExecutor(_settings())
+
+    assert executor.mode == "subprocess"
+    assert executor.available is True
+    command = executor._build_direct_command()
+    assert command[0] == sys.executable
+    assert command[-1].endswith("runner.py")
 
 
 def test_disabled_mode_stays_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
