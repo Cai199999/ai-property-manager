@@ -869,6 +869,201 @@
       font-size: 10px;
     }
 
+    /* ── 模型设置弹窗 / Toast ───────────────────────────────── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(11, 11, 11, 0.42);
+      backdrop-filter: blur(3px);
+    }
+
+    .modal-backdrop[hidden] {
+      display: none;
+    }
+
+    .modal {
+      width: min(440px, 100%);
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+      padding: 22px 24px 24px;
+      border: 1px solid var(--hairline);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .modal-kicker {
+      margin: 0 0 4px;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .modal-head h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .modal-close {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .modal-close:hover {
+      border-color: var(--text-muted);
+      color: var(--text-primary);
+    }
+
+    .modal-form {
+      display: grid;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .modal-field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .modal-field-label {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .modal-input,
+    .modal-select {
+      width: 100%;
+      min-height: 42px;
+      padding: 0 13px;
+      border: 1px solid var(--hairline);
+      border-radius: 12px;
+      background: var(--page);
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 13px;
+    }
+
+    .modal-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .modal-input:hover,
+    .modal-select:hover {
+      border-color: var(--text-muted);
+    }
+
+    .modal-input:focus-visible,
+    .modal-select:focus-visible,
+    .modal-close:focus-visible,
+    .password-toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .password-field {
+      position: relative;
+      display: flex;
+    }
+
+    .password-field .modal-input {
+      padding-right: 66px;
+    }
+
+    .password-toggle {
+      position: absolute;
+      top: 50%;
+      right: 6px;
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+      transform: translateY(-50%);
+    }
+
+    .modal-hint {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .modal-actions .query-button {
+      min-height: 40px;
+      padding: 0 20px;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      z-index: 60;
+      max-width: min(520px, calc(100vw - 32px));
+      padding: 12px 16px;
+      border: 1px solid var(--hairline);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--text-primary);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+      font-size: 13px;
+      line-height: 1.5;
+      opacity: 0;
+      transform: translate(-50%, 8px);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .toast[hidden] {
+      display: none;
+    }
+
+    .toast.is-visible {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .toast[data-kind="error"] {
+      border-color: color-mix(in srgb, var(--danger) 45%, var(--hairline));
+      color: var(--danger);
+    }
+
+    body.modal-open {
+      overflow: hidden;
+    }
+
     .sr-only {
       position: absolute;
       width: 1px;
@@ -931,6 +1126,18 @@
       .page {
         width: calc(100% - 24px);
         padding-top: 18px;
+      }
+
+      .modal-backdrop {
+        padding: 16px;
+      }
+
+      .modal {
+        padding: 18px;
+      }
+
+      .toast {
+        bottom: 18px;
       }
 
       h1 {
@@ -1027,7 +1234,11 @@
         <p class="subtitle" id="pageSubtitle">输入自然语言，查询工单数据并生成实时看板。</p>
       </div>
 
-      <div class="toolbar" role="group" aria-label="页面显示选项">
+      <div class="toolbar" role="group" aria-label="页面工具">
+        <button class="tool-button" id="modelSettingsButton" type="button"
+                aria-haspopup="dialog" aria-controls="modelSettingsModal">
+          ⚙️ 模型设置
+        </button>
         <button class="tool-button" id="textureButton" type="button" aria-pressed="false">
           纹理辅助
         </button>
@@ -1143,6 +1354,57 @@
     </footer>
   </div>
 
+  <!-- BYOK 模型设置：配置只保存在当前浏览器，随 /query/code 请求透传。 -->
+  <div class="modal-backdrop" id="modelSettingsModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true"
+             aria-labelledby="modelSettingsTitle">
+      <div class="modal-head">
+        <div>
+          <p class="modal-kicker">BYOK</p>
+          <h2 id="modelSettingsTitle">模型设置</h2>
+        </div>
+        <button class="modal-close" id="modelSettingsClose" type="button"
+                aria-label="关闭模型设置">×</button>
+      </div>
+      <form class="modal-form" id="modelSettingsForm" novalidate>
+        <div class="modal-field">
+          <label class="modal-field-label" for="modelProvider">服务商</label>
+          <select class="modal-select" id="modelProvider">
+            <option value="">系统默认（DeepSeek）</option>
+            <option value="doubao">豆包（Doubao）</option>
+            <option value="qwen">通义千问（Qwen）</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label class="modal-field-label" for="modelName">模型名称（选填）</label>
+          <input class="modal-input" id="modelName" type="text" maxlength="128"
+                 placeholder="例如：doubao-seed-1-6-250615"
+                 autocomplete="off" spellcheck="false">
+        </div>
+        <div class="modal-field">
+          <label class="modal-field-label" for="modelApiKey">API Key</label>
+          <span class="password-field">
+            <input class="modal-input" id="modelApiKey" type="password" maxlength="512"
+                   placeholder="留空则使用后端系统 Key"
+                   autocomplete="off" spellcheck="false">
+            <button class="password-toggle" id="modelApiKeyToggle" type="button"
+                    aria-pressed="false" aria-label="显示 API Key">显示</button>
+          </span>
+        </div>
+        <p class="modal-hint">
+          Key 仅保存在当前浏览器的 localStorage，不会写入服务端日志。
+          选择“系统默认”且不填 Key 时，将使用后端 .env 中的系统 Key。
+        </p>
+        <div class="modal-actions">
+          <button class="query-button query-button--secondary" id="modelSettingsCancel"
+                  type="button">取消</button>
+          <button class="query-button" type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="alert" aria-live="assertive" hidden></div>
+
   <script src="vendor/echarts.min.js"></script>
   <script>
     (() => {
@@ -1151,6 +1413,16 @@
       const root = document.documentElement;
       const themeButton = document.getElementById("themeButton");
       const textureButton = document.getElementById("textureButton");
+      const modelSettingsButton = document.getElementById("modelSettingsButton");
+      const modelSettingsModal = document.getElementById("modelSettingsModal");
+      const modelSettingsForm = document.getElementById("modelSettingsForm");
+      const modelSettingsClose = document.getElementById("modelSettingsClose");
+      const modelSettingsCancel = document.getElementById("modelSettingsCancel");
+      const modelProvider = document.getElementById("modelProvider");
+      const modelNameInput = document.getElementById("modelName");
+      const modelApiKey = document.getElementById("modelApiKey");
+      const modelApiKeyToggle = document.getElementById("modelApiKeyToggle");
+      const toastElement = document.getElementById("toast");
       const emptyState = document.getElementById("emptyState");
       const errorState = document.getElementById("errorState");
       const queryForm = document.getElementById("queryForm");
@@ -1204,6 +1476,10 @@
       const colorMedia = window.matchMedia("(prefers-color-scheme: dark)");
       const contrastMedia = window.matchMedia("(prefers-contrast: more)");
       const themeStorageKey = "assistant-theme";
+      const modelSettingsStorageKey = "assistant-model-settings";
+      const supportedProviders = new Set(["", "doubao", "qwen"]);
+      let toastTimer = 0;
+      let toastHideTimer = 0;
       let dynamicChart = null;
       let dynamicPayload = null;
       let textureEnabled = contrastMedia.matches;
@@ -1256,6 +1532,138 @@
           renderDynamicChart();
         }
       };
+
+      // ── BYOK 模型设置 ───────────────────────────────────────
+      const emptyModelSettings = () => ({
+        providerType: "",
+        modelName: "",
+        apiKey: ""
+      });
+
+      const readModelSettings = () => {
+        try {
+          const raw = localStorage.getItem(modelSettingsStorageKey);
+          if (!raw) {
+            return emptyModelSettings();
+          }
+          const saved = JSON.parse(raw);
+          return {
+            providerType: supportedProviders.has(saved?.providerType)
+              ? saved.providerType
+              : "",
+            modelName: typeof saved?.modelName === "string"
+              ? saved.modelName.trim()
+              : "",
+            apiKey: typeof saved?.apiKey === "string" ? saved.apiKey.trim() : ""
+          };
+        } catch {
+          // 存储损坏或被禁用时回退系统默认，不影响正常查询。
+          return emptyModelSettings();
+        }
+      };
+
+      const showToast = (message, kind = "info") => {
+        window.clearTimeout(toastTimer);
+        window.clearTimeout(toastHideTimer);
+        toastElement.hidden = false;
+        toastElement.dataset.kind = kind;
+        toastElement.textContent = message;
+        toastElement.classList.remove("is-visible");
+        window.requestAnimationFrame(() => toastElement.classList.add("is-visible"));
+        toastTimer = window.setTimeout(() => {
+          toastElement.classList.remove("is-visible");
+          toastHideTimer = window.setTimeout(() => {
+            toastElement.hidden = true;
+          }, 200);
+        }, 6000);
+      };
+
+      const persistModelSettings = (settings) => {
+        try {
+          localStorage.setItem(modelSettingsStorageKey, JSON.stringify(settings));
+          return true;
+        } catch {
+          showToast("无法保存模型设置：浏览器存储不可用", "error");
+          return false;
+        }
+      };
+
+      // 三个字段始终随请求发送；系统默认且无 Key 时全部传空，
+      // 由后端按 .env 中的系统配置处理。
+      const modelSettingsPayload = () => {
+        const settings = readModelSettings();
+        if (!settings.providerType && !settings.apiKey) {
+          return { provider_type: "", user_api_key: "", model_name: "" };
+        }
+        return {
+          provider_type: settings.providerType,
+          user_api_key: settings.apiKey,
+          model_name: settings.modelName
+        };
+      };
+
+      const setApiKeyVisibility = (visible) => {
+        modelApiKey.type = visible ? "text" : "password";
+        modelApiKeyToggle.textContent = visible ? "隐藏" : "显示";
+        modelApiKeyToggle.setAttribute("aria-pressed", String(visible));
+        modelApiKeyToggle.setAttribute(
+          "aria-label",
+          visible ? "隐藏 API Key" : "显示 API Key"
+        );
+      };
+
+      const openModelSettings = () => {
+        const settings = readModelSettings();
+        modelProvider.value = settings.providerType;
+        modelNameInput.value = settings.modelName;
+        modelApiKey.value = settings.apiKey;
+        setApiKeyVisibility(false);
+        modelSettingsModal.hidden = false;
+        document.body.classList.add("modal-open");
+        modelProvider.focus();
+      };
+
+      const closeModelSettings = () => {
+        modelSettingsModal.hidden = true;
+        document.body.classList.remove("modal-open");
+        // 不在 DOM 中遗留 Key；下次打开时从 localStorage 回填。
+        modelApiKey.value = "";
+        setApiKeyVisibility(false);
+        modelSettingsButton.focus();
+      };
+
+      modelSettingsButton.addEventListener("click", openModelSettings);
+      modelSettingsClose.addEventListener("click", closeModelSettings);
+      modelSettingsCancel.addEventListener("click", closeModelSettings);
+      modelSettingsModal.addEventListener("click", (event) => {
+        if (event.target === modelSettingsModal) {
+          closeModelSettings();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !modelSettingsModal.hidden) {
+          event.preventDefault();
+          closeModelSettings();
+        }
+      });
+      modelApiKeyToggle.addEventListener("click", () => {
+        setApiKeyVisibility(modelApiKey.type === "password");
+      });
+      modelSettingsForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const saved = persistModelSettings({
+          providerType: supportedProviders.has(modelProvider.value)
+            ? modelProvider.value
+            : "",
+          modelName: modelNameInput.value.trim(),
+          apiKey: modelApiKey.value.trim()
+        });
+        if (!saved) {
+          return;
+        }
+        closeModelSettings();
+        showToast("模型设置已保存");
+      });
 
       const decalFor = (index) => {
         if (!textureEnabled) {
@@ -1950,7 +2358,7 @@
               headers: {
                 "Content-Type": "application/json"
               },
-              body: JSON.stringify({ message }),
+              body: JSON.stringify({ message, ...modelSettingsPayload() }),
               signal: controller.signal
             });
           } catch (error) {
@@ -1969,6 +2377,12 @@
             payload = null;
           }
 
+          if (response.status === 401) {
+            const authMessage =
+              "大模型鉴权失败，请检查您在‘模型设置’中的 API Key";
+            showToast(authMessage, "error");
+            throw new Error(authMessage);
+          }
           if (!response.ok) {
             throw new Error(httpErrorMessage(response.status, payload));
           }
