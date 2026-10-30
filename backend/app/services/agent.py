@@ -17,7 +17,7 @@ from app.schemas.assistant import (
     QueryMeta,
     TimeRange,
 )
-from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.deepseek_extractor import LLMTimeRangeExtractor
 from app.services.summary import summarize_work_orders
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class AssistantAgent:
     def __init__(
         self,
         settings: Settings,
-        extractor: DeepSeekTimeRangeExtractor,
+        extractor: LLMTimeRangeExtractor,
         fetcher: DataFetcher,
     ) -> None:
         self._settings = settings

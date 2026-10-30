@@ -39,7 +39,43 @@ class LLMServiceError(AppError):
 
     code = "LLM_SERVICE_ERROR"
     status_code = 502
-    message = "时间语义解析服务暂时不可用"
+    message = "大模型服务暂时不可用"
+
+
+class LLMAuthError(LLMServiceError):
+    """Provider 鉴权失败：Key 缺失、无效或已过期。
+
+    继承 LLMServiceError 以兼容既有调用方，但对外必须返回 401，
+    便于 BYOK 用户直接定位自己的 Key 问题。
+    """
+
+    code = "LLM_AUTH_FAILED"
+    status_code = 401
+    message = "大模型鉴权失败，请检查 API Key"
+
+
+class LLMProviderUnsupportedError(AppError):
+    """请求指定的 provider_type 不在已接入列表中。"""
+
+    code = "LLM_PROVIDER_UNSUPPORTED"
+    status_code = 400
+    message = "不支持的大模型服务商"
+
+
+class LLMRateLimitError(LLMServiceError):
+    """Provider 触发限流或配额不足。"""
+
+    code = "LLM_RATE_LIMITED"
+    status_code = 429
+    message = "大模型服务限流，请稍后重试"
+
+
+class LLMRequestRejectedError(LLMServiceError):
+    """Provider 拒绝了请求参数，通常是 model_name 或消息格式不合法。"""
+
+    code = "LLM_REQUEST_REJECTED"
+    status_code = 400
+    message = "大模型拒绝了请求，请检查模型名称"
 
 
 class DataSourceNotConfiguredError(AppError):

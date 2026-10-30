@@ -12,7 +12,7 @@ from pydantic import SecretStr
 
 from app.config import Settings
 from app.services.word_exporter import (
-    DeepSeekReportSummarizer,
+    LLMReportSummarizer,
     ReportSummary,
     WordReportExporter,
     build_fallback_summary,
@@ -256,7 +256,7 @@ def test_build_summary_messages_limits_context() -> None:
 
 
 def test_summarizer_returns_fallback_without_key(tmp_path: Path) -> None:
-    summarizer = DeepSeekReportSummarizer(_settings(tmp_path))
+    summarizer = LLMReportSummarizer(_settings(tmp_path))
 
     summary = asyncio.run(
         summarizer.summarize(
@@ -289,7 +289,7 @@ def test_summarizer_returns_model_conclusion(tmp_path: Path) -> None:
             ]
         }
     )
-    summarizer = DeepSeekReportSummarizer(
+    summarizer = LLMReportSummarizer(
         _settings(tmp_path, deepseek_api_key=SecretStr("test-key")),
         client=client,
     )
@@ -310,7 +310,7 @@ def test_summarizer_returns_model_conclusion(tmp_path: Path) -> None:
 
 def test_summarizer_falls_back_on_upstream_error(tmp_path: Path) -> None:
     client = _mock_client({"error": {"message": "boom"}}, status=500)
-    summarizer = DeepSeekReportSummarizer(
+    summarizer = LLMReportSummarizer(
         _settings(tmp_path, deepseek_api_key=SecretStr("test-key")),
         client=client,
     )

@@ -5,13 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.schemas.assistant import ParserInfo, TimeRange
 
 
 class CodeQueryRequest(BaseModel):
-    """自然语言代码查询请求。"""
+    """自然语言代码查询请求。
+
+    BYOK 字段均为可选：
+    - provider_type 留空时使用 DEFAULT_LLM_PROVIDER（默认 deepseek）；
+    - user_api_key 留空时回退系统 .env 中对应 Provider 的 Key；
+    - model_name 留空时使用系统配置的默认模型。
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -24,6 +30,21 @@ class CodeQueryRequest(BaseModel):
         default=None,
         max_length=100,
         description="可选的项目名称过滤条件；留空表示全部项目",
+    )
+    provider_type: str | None = Field(
+        default=None,
+        max_length=32,
+        description="大模型服务商：deepseek / doubao / qwen；留空使用系统默认",
+    )
+    user_api_key: SecretStr | None = Field(
+        default=None,
+        max_length=512,
+        description="用户自带 API Key（BYOK）；留空回退系统 Key，服务端不会回显",
+    )
+    model_name: str | None = Field(
+        default=None,
+        max_length=128,
+        description="模型名称；留空使用该 Provider 的默认模型",
     )
 
 
@@ -77,6 +98,14 @@ class QueryTableInfo(BaseModel):
     file_name: str | None = None
 
 
+class LLMInfo(BaseModel):
+    """本次请求实际使用的大模型元信息，不含任何凭据。"""
+
+    provider_type: str
+    model: str
+    key_source: Literal["user", "system", "missing"] = "system"
+
+
 class CodeQueryMeta(BaseModel):
     """代码查询执行元信息。"""
 
@@ -87,6 +116,8 @@ class CodeQueryMeta(BaseModel):
     primary_table: str | None = None
     tables: list[QueryTableInfo] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # 让调用方确认 BYOK 参数确实生效；只展示 provider/model/key 来源。
+    llm: LLMInfo | None = None
 
 
 class CodeQueryResponse(BaseModel):

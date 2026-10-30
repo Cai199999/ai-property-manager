@@ -57,9 +57,18 @@ class Settings(BaseSettings):
     property_api_base_url: str = ""
     property_api_key: SecretStr = SecretStr("")
 
+    # 大模型 Provider：用户可通过请求体传 provider_type/user_api_key/model_name
+    # 覆盖以下默认值（BYOK）；未传时使用这里的系统配置。
+    default_llm_provider: str = "deepseek"
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    doubao_api_key: SecretStr = SecretStr("")
+    doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    doubao_model: str = "doubao-seed-1-6-250615"
+    qwen_api_key: SecretStr = SecretStr("")
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
     deepseek_timeout_seconds: float = Field(default=30.0, gt=0.0, le=120.0)
     llm_fallback_enabled: bool = True
 
@@ -118,6 +127,15 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"bwrap", "disabled"}:
             raise ValueError("code_sandbox_mode 只支持 bwrap 或 disabled")
+        return normalized
+
+    @field_validator("default_llm_provider")
+    @classmethod
+    def normalize_default_llm_provider(cls, value: str) -> str:
+        """默认 Provider 必须是已接入的 OpenAI 兼容服务。"""
+        normalized = value.strip().lower() or "deepseek"
+        if normalized not in {"deepseek", "doubao", "qwen"}:
+            raise ValueError("default_llm_provider 只支持 deepseek / doubao / qwen")
         return normalized
 
     @property

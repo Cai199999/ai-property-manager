@@ -4,6 +4,7 @@ import com.example.propertyassistant.client.AgentDownloadService;
 import com.example.propertyassistant.client.AgentGatewayService;
 import com.example.propertyassistant.config.RequestIdFilter;
 import com.example.propertyassistant.dto.AssistantQueryRequest;
+import com.example.propertyassistant.dto.CodeQueryRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -54,7 +55,7 @@ public class AssistantGatewayController {
 
     @PostMapping("/query/code")
     public ResponseEntity<JsonNode> codeQuery(
-            @Valid @RequestBody AssistantQueryRequest request,
+            @Valid @RequestBody CodeQueryRequest request,
             HttpServletRequest servletRequest
     ) {
         JsonNode response = agentGatewayService.codeQuery(request, requestId(servletRequest));

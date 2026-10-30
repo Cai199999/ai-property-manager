@@ -25,11 +25,12 @@ from app.config import Settings
 from app.core.logging import configure_logging
 from app.services.agent import AssistantAgent
 from app.services.code_executor import CodeExecutor
-from app.services.code_generator import DeepSeekCodeGenerator
+from app.services.code_generator import LLMCodeGenerator
 from app.services.code_query_agent import CodeQueryAgent
-from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.deepseek_extractor import LLMTimeRangeExtractor
+from app.services.llm_provider import LLMProviderFactory, SUPPORTED_PROVIDERS
 from app.services.report_export import ExcelReportExporter
-from app.services.word_exporter import DeepSeekReportSummarizer, WordReportExporter
+from app.services.word_exporter import LLMReportSummarizer, WordReportExporter
 from app.services.table_catalog import TableCatalog
 from app.services.table_import import TableImportService
 
@@ -39,11 +40,12 @@ logger = logging.getLogger(__name__)
 def create_app(
     settings: Settings | None = None,
     *,
-    extractor: DeepSeekTimeRangeExtractor | None = None,
+    extractor: LLMTimeRangeExtractor | None = None,
     fetcher: DataFetcher | None = None,
-    code_generator: DeepSeekCodeGenerator | None = None,
+    code_generator: LLMCodeGenerator | None = None,
     code_executor: CodeExecutor | None = None,
     table_catalog: TableCatalog | None = None,
+    provider_factory: LLMProviderFactory | None = None,
 ) -> FastAPI:
     """应用工厂，便于测试注入替身而不污染全局依赖。"""
     resolved_settings = settings or Settings()
@@ -54,8 +56,17 @@ def create_app(
         resolved_settings.data_source,
         resolved_settings,
     )
-    resolved_extractor = extractor or DeepSeekTimeRangeExtractor(resolved_settings)
-    resolved_code_generator = code_generator or DeepSeekCodeGenerator(resolved_settings)
+    # 三个 LLM 组件共享同一个 Provider 工厂，从而复用连接池，
+    # 并保证同一请求内 provider/model/key 的选择完全一致。
+    resolved_providers = provider_factory or LLMProviderFactory(resolved_settings)
+    resolved_extractor = extractor or LLMTimeRangeExtractor(
+        resolved_settings,
+        provider_factory=resolved_providers,
+    )
+    resolved_code_generator = code_generator or LLMCodeGenerator(
+        resolved_settings,
+        provider_factory=resolved_providers,
+    )
     resolved_code_executor = code_executor or CodeExecutor(resolved_settings)
     resolved_table_catalog = table_catalog
     if resolved_table_catalog is None and resolved_settings.table_directory_enabled:
@@ -67,7 +78,10 @@ def create_app(
     )
     report_exporter = ExcelReportExporter(resolved_settings)
     word_exporter = WordReportExporter(resolved_settings)
-    report_summarizer = DeepSeekReportSummarizer(resolved_settings)
+    report_summarizer = LLMReportSummarizer(
+        resolved_settings,
+        provider_factory=resolved_providers,
+    )
 
     agent = AssistantAgent(resolved_settings, resolved_extractor, resolved_fetcher)
     code_agent = CodeQueryAgent(
@@ -80,6 +94,7 @@ def create_app(
         report_exporter=report_exporter,
         word_exporter=word_exporter,
         report_summarizer=report_summarizer,
+        provider_factory=resolved_providers,
     )
 
     @asynccontextmanager
@@ -92,6 +107,9 @@ def create_app(
             resolved_settings.app_env,
         )
         yield
+        # 共享工厂负责关闭连接池；各组件的 aclose 在共享模式下是空操作，
+        # 但仍保留以兼容测试中注入的独立实例。
+        await resolved_providers.aclose()
         await resolved_extractor.aclose()
         await report_summarizer.aclose()
         close_generator = getattr(resolved_code_generator, "aclose", None)
@@ -154,6 +172,8 @@ def create_app(
             "version": __version__,
             "data_source": resolved_fetcher.source,
             "llm_configured": bool(resolved_settings.deepseek_key),
+            "default_llm_provider": resolved_settings.default_llm_provider,
+            "llm_providers": list(SUPPORTED_PROVIDERS),
             "code_query_enabled": resolved_settings.code_query_enabled,
             "code_sandbox_available": resolved_code_executor.available,
             "table_directory_enabled": resolved_settings.table_directory_enabled,

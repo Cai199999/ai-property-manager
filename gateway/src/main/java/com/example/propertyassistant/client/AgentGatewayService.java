@@ -2,6 +2,7 @@ package com.example.propertyassistant.client;
 
 import com.example.propertyassistant.config.GatewayProperties;
 import com.example.propertyassistant.dto.AssistantQueryRequest;
+import com.example.propertyassistant.dto.CodeQueryRequest;
 import com.example.propertyassistant.exception.InvalidUploadException;
 import com.example.propertyassistant.exception.UploadTooLargeException;
 import com.example.propertyassistant.exception.UpstreamAgentException;
@@ -62,7 +63,7 @@ public class AgentGatewayService {
         return postJson(properties.queryPath(), request, requestId);
     }
 
-    public JsonNode codeQuery(AssistantQueryRequest request, String requestId) {
+    public JsonNode codeQuery(CodeQueryRequest request, String requestId) {
         return postJson(properties.codeQueryPath(), request, requestId);
     }
 

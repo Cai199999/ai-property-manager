@@ -70,6 +70,9 @@ async def query_with_generated_code(
         message=payload.message,
         request_id=get_request_id(request),
         property_name=payload.property_name,
+        provider_type=payload.provider_type,
+        user_api_key=payload.user_api_key,
+        model_name=payload.model_name,
     )
 
 

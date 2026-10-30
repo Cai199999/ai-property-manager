@@ -10,6 +10,7 @@ from time import monotonic, perf_counter
 
 import anyio
 import pandas as pd
+from pydantic import SecretStr
 
 from app.adapters.base import DataFetcher, FetchRequest
 from app.config import Settings
@@ -26,6 +27,7 @@ from app.schemas.code_query import (
     CodeQueryMeta,
     CodeQueryResponse,
     CodeResult,
+    LLMInfo,
     QueryTableInfo,
     ResultColumn,
 )
@@ -38,7 +40,7 @@ from app.services.code_executor import (
 )
 from app.services.code_generator import (
     CatalogProfile,
-    DeepSeekCodeGenerator,
+    LLMCodeGenerator,
     TableProfile,
     build_catalog_profile,
     build_initial_messages,
@@ -53,12 +55,13 @@ from app.services.code_safety import (
     sanitize_error_text,
     validate_generated_code,
 )
-from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.deepseek_extractor import LLMTimeRangeExtractor
+from app.services.llm_provider import LLMProviderFactory, ResolvedProvider
 from app.services.report_export import REPORT_DOWNLOAD_PATH, ExcelReportExporter
 from app.services.table_catalog import TableCatalog, TableSnapshot
 from app.services.time_range import TimeExtraction
 from app.services.word_exporter import (
-    DeepSeekReportSummarizer,
+    LLMReportSummarizer,
     ReportSummary,
     WordReportExporter,
     build_fallback_summary,
@@ -88,20 +91,24 @@ class CodeQueryAgent:
     def __init__(
         self,
         settings: Settings,
-        extractor: DeepSeekTimeRangeExtractor,
+        extractor: LLMTimeRangeExtractor,
         fetcher: DataFetcher,
-        generator: DeepSeekCodeGenerator,
+        generator: LLMCodeGenerator,
         executor: CodeExecutor,
         table_catalog: TableCatalog | None = None,
         report_exporter: ExcelReportExporter | None = None,
         word_exporter: WordReportExporter | None = None,
-        report_summarizer: DeepSeekReportSummarizer | None = None,
+        report_summarizer: LLMReportSummarizer | None = None,
+        provider_factory: LLMProviderFactory | None = None,
     ) -> None:
         self._settings = settings
         self._extractor = extractor
         self._fetcher = fetcher
         self._generator = generator
         self._executor = executor
+        # Provider 工厂只负责解析 BYOK 参数；httpx 客户端懒加载，
+        # 未传 provider 覆盖时不会产生额外连接。
+        self._providers = provider_factory or LLMProviderFactory(settings)
         self._table_catalog = (
             table_catalog
             if table_catalog is not None and settings.table_directory_enabled
@@ -117,6 +124,9 @@ class CodeQueryAgent:
         message: str,
         request_id: str,
         property_name: str | None = None,
+        provider_type: str | None = None,
+        user_api_key: str | SecretStr | None = None,
+        model_name: str | None = None,
     ) -> CodeQueryResponse:
         if not self._settings.code_query_enabled:
             raise CodeGenerationError(
@@ -129,8 +139,17 @@ class CodeQueryAgent:
         started_at = perf_counter()
         deadline = monotonic() + self._settings.code_total_timeout_seconds
 
+        # BYOK：只有显式传了 provider/model/key 才解析覆盖配置；
+        # 未传时保持原有“各组件自行使用系统默认”的行为。
+        provider = self._resolve_provider(provider_type, user_api_key, model_name)
+        llm_info = self._providers.describe(
+            provider_type=provider_type,
+            user_api_key=user_api_key,
+            model_name=model_name,
+        )
+
         try:
-            extraction = await self._extractor.extract(message)
+            extraction = await self._extractor.extract(message, provider=provider)
         except TimeRangeParseError:
             # 多文件汇总（如“汇总所有区域的总工单量和总金额”）往往不带时间。
             # 目录模式有真实数据范围，可默认覆盖全部工单；RPA 单表模式
@@ -166,6 +185,7 @@ class CodeQueryAgent:
             raw_response = await self._generator.complete(
                 messages,
                 timeout=min(self._settings.code_llm_timeout_seconds, remaining),
+                provider=provider,
             )
             messages.append({"role": "assistant", "content": raw_response})
 
@@ -275,6 +295,7 @@ class CodeQueryAgent:
                 extraction=extraction,
                 source=source,
                 warnings=warnings,
+                provider=provider,
             )
             word_download_url = await self._export_word_report(
                 request_id=request_id,
@@ -332,6 +353,7 @@ class CodeQueryAgent:
                     primary_table=source.primary_table,
                     tables=source.tables,
                     warnings=_dedupe(warnings),
+                    llm=LLMInfo(**llm_info),
                 ),
             )
 
@@ -391,6 +413,28 @@ class CodeQueryAgent:
             return None
         return f"{REPORT_DOWNLOAD_PATH}/{exported.filename}"
 
+    def _resolve_provider(
+        self,
+        provider_type: str | None,
+        user_api_key: str | SecretStr | None,
+        model_name: str | None,
+    ) -> ResolvedProvider | None:
+        """仅在用户显式覆盖时解析 Provider，未知服务商在此返回 400。"""
+        user_key = ""
+        if isinstance(user_api_key, SecretStr):
+            user_key = user_api_key.get_secret_value().strip()
+        elif user_api_key:
+            user_key = str(user_api_key).strip()
+
+        has_override = bool((provider_type or "").strip() or (model_name or "").strip() or user_key)
+        if not has_override:
+            return None
+        return self._providers.resolve(
+            provider_type=provider_type,
+            user_api_key=user_key or None,
+            model_name=model_name,
+        )
+
     async def _build_report_summary(
         self,
         *,
@@ -400,6 +444,7 @@ class CodeQueryAgent:
         extraction: TimeExtraction,
         source: _SourceData,
         warnings: list[str],
+        provider: ResolvedProvider | None = None,
     ) -> ReportSummary | None:
         """生成报告结论；模型失败时退回规则摘要，不阻断 Word 生成。"""
         if not self._settings.word_report_enabled or execution.row_count == 0:
@@ -424,13 +469,15 @@ class CodeQueryAgent:
                 chart_meta=chart_meta.model_dump(),
                 time_range=extraction.time_range.model_dump(),
                 table_names=[table.name for table in source.tables],
+                provider=provider,
             )
         except Exception:  # noqa: BLE001 - 总结失败不能影响主查询
             logger.exception("Word 报告总结异常")
             summary = fallback
 
         # 未配置模型时使用规则摘要属于正常降级，不产生“失败”告警。
-        if summary.engine == "fallback" and self._settings.deepseek_key:
+        has_llm = provider is not None or bool(self._settings.deepseek_key)
+        if summary.engine == "fallback" and has_llm:
             warnings.append("AI 总结生成失败，Word 报告已使用系统自动摘要")
         return summary
 

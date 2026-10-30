@@ -31,7 +31,7 @@ from app.services.time_range import TimeExtraction
 
 
 class _FakeExtractor:
-    async def extract(self, message: str) -> TimeExtraction:
+    async def extract(self, message: str, *, provider: object | None = None) -> TimeExtraction:
         return TimeExtraction(
             time_range=TimeRange(start_date="2026-09-01", end_date="2026-09-30"),
             engine="rule_based",
@@ -67,7 +67,13 @@ class _FakeGenerator:
         self.responses = responses
         self.calls: list[list[dict[str, str]]] = []
 
-    async def complete(self, messages: list[dict[str, str]], *, timeout: float) -> str:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        timeout: float,
+        provider: object | None = None,
+    ) -> str:
         self.calls.append(messages)
         if not self.responses:
             raise AssertionError("没有更多假响应")
@@ -213,7 +219,7 @@ def test_agent_uses_directory_tables_before_rpa(tmp_path: Path) -> None:
 
 
 class _ExplodingExtractor:
-    async def extract(self, message: str) -> TimeExtraction:
+    async def extract(self, message: str, *, provider: object | None = None) -> TimeExtraction:
         raise TimeRangeParseError("未识别到时间范围，请补充时间")
 
     async def aclose(self) -> None:

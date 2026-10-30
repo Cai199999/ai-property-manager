@@ -181,10 +181,24 @@ class AssistantGatewayIntegrationTest {
             });
             UPSTREAM.createContext("/api/v1/assistant/query/code", exchange -> {
                 FORWARDED_REQUEST_ID.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
-                FORWARDED_BODY.set(new String(
+                String requestBody = new String(
                         exchange.getRequestBody().readAllBytes(),
                         StandardCharsets.UTF_8
-                ));
+                );
+                FORWARDED_BODY.set(requestBody);
+                if (requestBody.contains("触发鉴权失败")) {
+                    sendJson(exchange, 401, """
+                            {
+                              "request_id": "gateway-test-001",
+                              "error": {
+                                "code": "LLM_AUTH_FAILED",
+                                "message": "大模型鉴权失败，请检查 API Key",
+                                "details": {"provider_type": "doubao", "key_source": "user"}
+                              }
+                            }
+                            """);
+                    return;
+                }
                 sendJson(exchange, 200, CODE_RESPONSE_JSON);
             });
             UPSTREAM.createContext("/api/v1/assistant/tables/upload", exchange -> {
@@ -351,6 +365,65 @@ class AssistantGatewayIntegrationTest {
                 .isTrue();
         assertThat(body.path("result").path("rows").get(0).path("工单量").asInt())
                 .isEqualTo(132);
+    }
+
+    @Test
+    void relaysUpstream401ForByokAuthFailure() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Request-Id", "gateway-byok-401");
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/v1/assistant/query/code",
+                HttpMethod.POST,
+                new HttpEntity<>(
+                        Map.of(
+                                "message", "触发鉴权失败",
+                                "provider_type", "doubao",
+                                "user_api_key", "sk-byok-invalid"
+                        ),
+                        headers
+                ),
+                String.class
+        );
+
+        // 鉴权失败必须原样透传 401，不能包装成 500/502。
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).contains("大模型鉴权失败，请检查 API Key");
+        assertThat(response.getBody()).doesNotContain("sk-byok-invalid");
+        assertThat(response.getHeaders().get("X-Request-Id"))
+                .containsExactly("gateway-byok-401");
+    }
+
+    @Test
+    void forwardsByokFieldsToAgentWithoutDroppingThem() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Request-Id", "gateway-byok-001");
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/v1/assistant/query/code",
+                HttpMethod.POST,
+                new HttpEntity<>(
+                        Map.of(
+                                "message", "按区域统计工单量",
+                                "provider_type", "doubao",
+                                "user_api_key", "sk-byok",
+                                "model_name", "doubao-seed-1-6-250615"
+                        ),
+                        headers
+                ),
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // 网关只做透传：三个 BYOK 字段必须原样出现在上游 JSON 中。
+        assertThat(FORWARDED_BODY.get()).contains("\"provider_type\":\"doubao\"");
+        assertThat(FORWARDED_BODY.get()).contains("\"user_api_key\":\"sk-byok\"");
+        assertThat(FORWARDED_BODY.get())
+                .contains("\"model_name\":\"doubao-seed-1-6-250615\"");
+        // 响应中不能回显用户 Key。
+        assertThat(response.getBody()).doesNotContain("sk-byok");
     }
 
     @Test

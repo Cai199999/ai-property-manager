@@ -5,7 +5,7 @@ import httpx
 from pydantic import SecretStr
 
 from app.config import Settings
-from app.services.deepseek_extractor import DeepSeekTimeRangeExtractor
+from app.services.deepseek_extractor import LLMTimeRangeExtractor
 
 
 def test_deepseek_extracts_time_range_from_json_response() -> None:
@@ -38,7 +38,7 @@ def test_deepseek_extracts_time_range_from_json_response() -> None:
         deepseek_model="deepseek-chat",
         llm_fallback_enabled=False,
     )
-    extractor = DeepSeekTimeRangeExtractor(settings, client=client)
+    extractor = LLMTimeRangeExtractor(settings, client=client)
 
     result = asyncio.run(extractor.extract("汇总上个月的工单"))
     asyncio.run(client.aclose())
@@ -63,7 +63,7 @@ def test_deepseek_failure_falls_back_to_local_rules() -> None:
         deepseek_api_key=SecretStr("unit-test-key"),
         llm_fallback_enabled=True,
     )
-    extractor = DeepSeekTimeRangeExtractor(settings, client=client)
+    extractor = LLMTimeRangeExtractor(settings, client=client)
 
     result = asyncio.run(extractor.extract("最近7天"))
     asyncio.run(client.aclose())

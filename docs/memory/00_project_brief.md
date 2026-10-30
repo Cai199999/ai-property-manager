@@ -18,7 +18,7 @@
 | Agent | Python 3 + FastAPI + Uvicorn | 8000 |
 | 数据处理 | Pandas 2.3+、openpyxl | — |
 | 报表 | openpyxl（Excel）、python-docx + matplotlib（Word 图表） | — |
-| LLM | DeepSeek API（`deepseek-chat`），失败时降级到本地中文规则解析 | — |
+| LLM | 多 Provider：DeepSeek / 豆包 / 通义千问（OpenAI 兼容），支持 BYOK；系统 Key 失败时降级本地中文规则解析 | — |
 | 沙箱 | bwrap（`CODE_SANDBOX_MODE`，默认 `bwrap`） | — |
 | 持久化 | 当前无数据库，仅运行期文件目录 `.runtime/` | — |
 
@@ -26,13 +26,14 @@
 
 ## 3. 核心功能模块
 
-1. **自然语言时间解析**：`DeepSeekTimeRangeExtractor` → 起止日期；无 Key 或调用失败时降级 `rule_time_parser`。
+1. **自然语言时间解析**：`LLMTimeRangeExtractor` → 起止日期；系统 Key 缺失或调用失败时降级 `rule_time_parser`（用户自带 Key 鉴权失败不回退）。
 2. **数据源适配**：`DataFetcherRegistry` + `RPAFetcher`（RPA 驱动，当前 `SimulatedRpaExportDriver`）/ `APIFetcher`（第二阶段占位，返回 `501 DATA_SOURCE_NOT_CONFIGURED`）；统一列映射与清洗。
 3. **汇总分析**：`summary.py` 用 Pandas 计算指标、按项目/类型/状态分组、生成明细预览。
 4. **多表能力**：表目录扫描、多文件上传、同构工单表纵向汇总、多表联查、Excel 原始内容分页预览。
 5. **NL → Pandas 代码查询**：`code_generator` 生成代码，`code_safety` 静态校验，`sandbox/runner` 在 bwrap 隔离中执行。
 6. **导出能力**：Excel 结果导出（`report_export.py`，TTL + 文件数/大小上限）、Word 可视化报告（`word_exporter.py`，AI 结论 + 图表 + 数据表）。
 7. **网关职责**：参数校验、请求 ID、超时、统一错误体、JSON 透传、流式下载代理（并发与大小上限）。
+8. **多模型 BYOK**：`llm_provider.py` 工厂统一解析 provider/model/key，用户 Key 优先；时间解析、代码生成、Word 总结共用同一 Provider；日志强制脱敏，响应仅回显 `meta.llm` 元信息。
 
 ## 4. 已知边界 / 后续方向
 

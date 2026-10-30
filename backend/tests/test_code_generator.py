@@ -11,7 +11,7 @@ from app.config import Settings
 from app.core.exceptions import LLMServiceError
 from app.schemas.assistant import TimeRange
 from app.services.code_generator import (
-    DeepSeekCodeGenerator,
+    LLMCodeGenerator,
     build_catalog_profile,
     build_initial_messages,
     build_table_profile,
@@ -81,7 +81,7 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
         deepseek_api_key=SecretStr("unit-test-key"),
         deepseek_model="deepseek-chat",
     )
-    generator = DeepSeekCodeGenerator(settings, client=client)
+    generator = LLMCodeGenerator(settings, client=client)
 
     result = asyncio.run(
         generator.complete(
@@ -100,7 +100,7 @@ def test_deepseek_code_generator_returns_raw_code() -> None:
 
 
 def test_code_generator_requires_api_key() -> None:
-    generator = DeepSeekCodeGenerator(Settings(_env_file=None, deepseek_api_key=SecretStr("")))
+    generator = LLMCodeGenerator(Settings(_env_file=None, deepseek_api_key=SecretStr("")))
 
     with pytest.raises(LLMServiceError):
         asyncio.run(generator.complete([{"role": "user", "content": "test"}], timeout=1))

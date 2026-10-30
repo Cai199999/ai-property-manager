@@ -35,6 +35,10 @@ from docx.oxml.ns import qn  # noqa: E402
 from docx.shared import Cm, Pt, RGBColor  # noqa: E402
 
 from app.config import Settings  # noqa: E402
+from app.services.llm_provider import (  # noqa: E402
+    LLMProviderFactory,
+    ResolvedProvider,
+)
 from app.services.report_export import (  # noqa: E402
     ExportFile,
     cleanup_report_directory,
@@ -86,25 +90,23 @@ class ReportSummary:
     engine: str  # deepseek | fallback
 
 
-class DeepSeekReportSummarizer:
-    """单独调用一次 DeepSeek 生成报告结论；失败时退回规则摘要。"""
+class LLMReportSummarizer:
+    """单独调用一次大模型生成报告结论；失败时退回规则摘要。"""
 
     def __init__(
         self,
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
+        provider_factory: LLMProviderFactory | None = None,
     ) -> None:
         self._settings = settings
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.report_summary_timeout_seconds)
-        )
-        self._owns_client = client is None
-        self._endpoint = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
+        self._providers = provider_factory or LLMProviderFactory(settings, client=client)
+        self._owns_providers = provider_factory is None
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        if self._owns_providers:
+            await self._providers.aclose()
 
     async def summarize(
         self,
@@ -115,12 +117,16 @@ class DeepSeekReportSummarizer:
         chart_meta: Mapping[str, Any] | None,
         time_range: Mapping[str, Any] | None = None,
         table_names: Sequence[str] = (),
+        provider: ResolvedProvider | None = None,
     ) -> ReportSummary:
         fallback = ReportSummary(
             text=build_fallback_summary(columns=columns, rows=rows, chart_meta=chart_meta),
             engine="fallback",
         )
-        if not self._settings.deepseek_key:
+        try:
+            resolved = provider or self._providers.resolve()
+        except Exception as exc:  # noqa: BLE001 - 总结属于可选增强，失败不能阻断报告
+            logger.warning("Word 报告总结不可用: %s", type(exc).__name__)
             return fallback
 
         messages = build_summary_messages(
@@ -132,32 +138,27 @@ class DeepSeekReportSummarizer:
             table_names=table_names,
         )
         try:
-            response = await self._client.post(
-                self._endpoint,
-                headers={
-                    "Authorization": f"Bearer {self._settings.deepseek_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self._settings.deepseek_model,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 600,
-                    "stream": False,
-                },
+            content = await self._providers.chat(
+                resolved,
+                messages,
+                temperature=0.3,
+                max_tokens=600,
                 timeout=self._settings.report_summary_timeout_seconds,
             )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-            logger.warning("Word 报告总结生成失败: %s", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - 外部模型边界，失败即降级
+            logger.warning(
+                "Word 报告总结生成失败 provider=%s key_source=%s error=%s",
+                resolved.provider_type,
+                resolved.key_source,
+                type(exc).__name__,
+            )
             return fallback
 
         text = _clean_summary(content)
         if not text:
             logger.warning("Word 报告总结为空，使用规则摘要")
             return fallback
-        return ReportSummary(text=text, engine="deepseek")
+        return ReportSummary(text=text, engine=resolved.provider_type)
 
 
 def build_summary_messages(

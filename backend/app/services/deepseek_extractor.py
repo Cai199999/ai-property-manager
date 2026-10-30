@@ -1,8 +1,7 @@
-"""使用 DeepSeek 将自然语言转换为结构化时间范围。"""
+"""使用大模型将自然语言转换为结构化时间范围（支持 BYOK）。"""
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import replace
@@ -12,8 +11,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
-from app.core.exceptions import LLMServiceError, TimeRangeParseError
+from app.core.exceptions import LLMAuthError, LLMServiceError, TimeRangeParseError
 from app.schemas.assistant import TimeRange
+from app.services.llm_provider import LLMProviderFactory, ResolvedProvider
 from app.services.rule_time_parser import RuleBasedTimeParser
 from app.services.time_range import TimeExtraction
 
@@ -36,7 +36,7 @@ _SYSTEM_PROMPT = """你是物业工单查询系统的日期解析器。
 """
 
 
-class _DeepSeekTimeRange(BaseModel):
+class _TimeRangePayload(BaseModel):
     """约束模型输出，避免把任意 JSON 当成业务数据。"""
 
     model_config = ConfigDict(extra="ignore")
@@ -48,12 +48,13 @@ class _DeepSeekTimeRange(BaseModel):
     error: str | None = None
 
 
-class DeepSeekTimeRangeExtractor:
-    """DeepSeek Chat Completions 时间解析器。
+class LLMTimeRangeExtractor:
+    """大模型时间解析器，支持 DeepSeek / 豆包 / 通义千问。
 
     模型调用失败时，根据配置决定：
-    - LLM_FALLBACK_ENABLED=true：降级到本地规则，并在响应 warnings 中标注；
-    - false：抛出 LLMServiceError，由 API 返回 502。
+    - 系统 Key 且 LLM_FALLBACK_ENABLED=true：降级到本地规则，并在 warnings 中标注；
+    - 用户自带 Key（BYOK）鉴权失败：直接 401 上抛，绝不静默回退，
+      否则用户会误以为自己的 Key 生效了。
     """
 
     def __init__(
@@ -61,61 +62,91 @@ class DeepSeekTimeRangeExtractor:
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
+        provider_factory: LLMProviderFactory | None = None,
         rule_parser: RuleBasedTimeParser | None = None,
     ) -> None:
         self._settings = settings
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.deepseek_timeout_seconds)
-        )
-        self._owns_client = client is None
+        self._providers = provider_factory or LLMProviderFactory(settings, client=client)
+        self._owns_providers = provider_factory is None
         self._rule_parser = rule_parser or RuleBasedTimeParser()
-        self._endpoint = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        if self._owns_providers:
+            await self._providers.aclose()
 
-    async def extract(self, message: str) -> TimeExtraction:
+    async def extract(
+        self,
+        message: str,
+        *,
+        provider: ResolvedProvider | None = None,
+    ) -> TimeExtraction:
         today = datetime.now(self._settings.tz).date()
 
-        if not self._settings.deepseek_key:
+        try:
+            resolved = provider or self._providers.resolve()
+        except LLMServiceError as exc:
             if not self._settings.llm_fallback_enabled:
-                raise LLMServiceError("未配置 DEEPSEEK_API_KEY，且本地降级已关闭")
+                raise
             return self._fallback(
                 message,
                 today,
-                "未配置 DEEPSEEK_API_KEY，已降级为本地规则解析。",
+                f"未配置可用的大模型 API Key，已降级为本地规则解析（{type(exc).__name__}）。",
             )
 
         try:
-            payload = await self._request_deepseek(message, today)
+            payload = await self._request_time_range(resolved, message, today)
             start_date = payload.start_date
             end_date = payload.end_date
             if payload.error or start_date is None or end_date is None:
                 raise ValueError(payload.error or "模型未返回完整日期")
 
-            time_range = TimeRange(start_date=start_date, end_date=end_date)
             return TimeExtraction(
-                time_range=time_range,
-                engine="deepseek",
-                model=self._settings.deepseek_model,
+                time_range=TimeRange(start_date=start_date, end_date=end_date),
+                engine=resolved.provider_type,
+                model=resolved.model,
                 confidence=payload.confidence,
-                reason=payload.reason or "DeepSeek 语义解析",
+                reason=payload.reason or f"{resolved.provider_type} 语义解析",
             )
-        except Exception as exc:  # noqa: BLE001 - 外部模型边界，需主动降级
-            logger.warning("DeepSeek 时间解析失败: %s", exc)
+        except LLMAuthError:
+            # 用户 Key 鉴权失败必须原样上抛（401），不能回退到本地规则。
+            if resolved.key_source == "user":
+                raise
+            logger.warning(
+                "系统 Key 鉴权失败 provider=%s，降级为本地规则",
+                resolved.provider_type,
+            )
             if not self._settings.llm_fallback_enabled:
-                raise LLMServiceError("DeepSeek 时间语义解析失败") from exc
+                raise
             return self._fallback(
                 message,
                 today,
-                f"DeepSeek 时间解析失败，已降级为本地规则解析（{type(exc).__name__}）。",
+                f"{resolved.provider_type} 鉴权失败，已降级为本地规则解析。",
+            )
+        except Exception as exc:  # noqa: BLE001 - 外部模型边界，需主动降级
+            # 只记录异常类型，避免第三方异常文本夹带请求细节。
+            logger.warning(
+                "大模型时间解析失败 provider=%s key_source=%s error=%s",
+                resolved.provider_type,
+                resolved.key_source,
+                type(exc).__name__,
+            )
+            if not self._settings.llm_fallback_enabled:
+                raise LLMServiceError("大模型时间语义解析失败") from exc
+            return self._fallback(
+                message,
+                today,
+                f"大模型时间解析失败，已降级为本地规则解析（{type(exc).__name__}）。",
             )
 
-    async def _request_deepseek(self, message: str, today: date) -> _DeepSeekTimeRange:
-        request_body = {
-            "model": self._settings.deepseek_model,
-            "messages": [
+    async def _request_time_range(
+        self,
+        provider: ResolvedProvider,
+        message: str,
+        today: date,
+    ) -> _TimeRangePayload:
+        content = await self._providers.chat(
+            provider,
+            [
                 {
                     "role": "system",
                     "content": (
@@ -125,26 +156,13 @@ class DeepSeekTimeRangeExtractor:
                 },
                 {"role": "user", "content": message},
             ],
-            "temperature": 0.0,
-            "max_tokens": 300,
-            "response_format": {"type": "json_object"},
-        }
-        response = await self._client.post(
-            self._endpoint,
-            headers={
-                "Authorization": f"Bearer {self._settings.deepseek_key}",
-                "Content-Type": "application/json",
-            },
-            json=request_body,
+            temperature=0.0,
+            max_tokens=300,
+            timeout=self._settings.deepseek_timeout_seconds,
+            response_format={"type": "json_object"},
         )
-        response.raise_for_status()
-        body = response.json()
-        content = body["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise ValueError("DeepSeek 返回内容不是字符串")
-
         raw_json = self._extract_json_object(content)
-        return _DeepSeekTimeRange.model_validate_json(raw_json)
+        return _TimeRangePayload.model_validate_json(raw_json)
 
     @staticmethod
     def _extract_json_object(content: str) -> str:
@@ -157,7 +175,7 @@ class DeepSeekTimeRangeExtractor:
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            raise ValueError("DeepSeek 返回中未找到 JSON 对象")
+            raise ValueError("模型返回中未找到 JSON 对象")
         return text[start : end + 1]
 
     def _fallback(self, message: str, today: date, warning: str) -> TimeExtraction:

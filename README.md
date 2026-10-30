@@ -56,14 +56,19 @@ ai-property-manager/
 
 ## 快速启动
 
-### 1. 配置 DeepSeek
+### 1. 配置大模型（可选 BYOK）
 
-编辑 `backend/.env`：
+编辑 `backend/.env` 配置系统兜底 Key：
 
 ```dotenv
+DEFAULT_LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=sk-xxxxxxxx
+# 可选：豆包 / 通义千问
+DOUBAO_API_KEY=
+QWEN_API_KEY=
 ```
 
+调用 `/api/v1/assistant/query/code` 时可在请求体传入 `provider_type`、`user_api_key`、`model_name`，优先使用用户自带 Key（BYOK）；不传则回退系统 Key。
 未配置 Key 时，默认使用本地规则解析，并在响应 `meta.warnings` 中明确标注。
 生产环境建议设置 `LLM_FALLBACK_ENABLED=false`，让模型故障显式失败。
 
@@ -207,7 +212,24 @@ curl -s http://127.0.0.1:8080/api/v1/assistant/query/code \
   -H 'X-Request-Id: code-demo-001' \
   -d '{"message": "按所属区域统计工单量，用饼图展示"}' \
   | python3 -m json.tool
+
+# BYOK：使用用户自带的豆包 Key 和指定模型
+curl -s http://127.0.0.1:8080/api/v1/assistant/query/code \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "按所属区域统计工单量",
+       "provider_type": "doubao",
+       "user_api_key": "sk-your-own-key",
+       "model_name": "doubao-seed-1-6-250615"}' \
+  | python3 -m json.tool
 ```
+
+BYOK 说明：
+
+- 支持的 `provider_type`：`deepseek`、`doubao`、`qwen`，三者均走 OpenAI 兼容 `/chat/completions`。
+- 同一请求内的时间解析、代码生成、Word 报告结论复用同一套 provider/model/key。
+- 响应 `meta.llm` 会回显 `{provider_type, model, key_source}`，`key_source` 为 `user` / `system` / `missing`，不包含任何 Key 片段。
+- 错误语义：未知服务商 `400 LLM_PROVIDER_UNSUPPORTED`；Key 缺失或无效 `401 LLM_AUTH_FAILED`；限流 `429 LLM_RATE_LIMITED`；上游故障 `502 LLM_SERVICE_ERROR`。
+- 用户自带 Key 鉴权失败时不会回退系统 Key 或本地规则，避免掩盖配置错误。
 
 ### 动态结果契约
 
@@ -410,9 +432,12 @@ PROPERTY_API_KEY=...
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `DATA_SOURCE` | `rpa` | `rpa` / `api` |
-| `DEEPSEEK_API_KEY` | 空 | DeepSeek 密钥 |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | 模型名 |
-| `LLM_FALLBACK_ENABLED` | `true` | 模型失败时是否本地降级 |
+| `DEFAULT_LLM_PROVIDER` | `deepseek` | 请求未指定 provider_type 时使用的服务商 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek 系统兜底密钥 |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek 默认模型 |
+| `DOUBAO_API_KEY` / `DOUBAO_MODEL` | 空 / `doubao-seed-1-6-250615` | 豆包（火山方舟）系统兜底配置 |
+| `QWEN_API_KEY` / `QWEN_MODEL` | 空 / `qwen-plus` | 通义千问（DashScope）系统兜底配置 |
+| `LLM_FALLBACK_ENABLED` | `true` | 系统 Key 失败时是否本地降级；用户自带 Key 鉴权失败不回退 |
 | `MAX_QUERY_DAYS` | `366` | 单次查询最大天数 |
 | `PREVIEW_ROWS` | `20` | 响应中明细预览行数 |
 | `TIMEZONE` | `Asia/Shanghai` | 相对日期计算时区 |

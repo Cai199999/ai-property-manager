@@ -1,4 +1,4 @@
-"""使用 DeepSeek 生成 Pandas 分析代码。
+"""使用大模型生成 Pandas 分析代码（支持 BYOK）。
 
 模型只看到表结构、少量样例和用户问题，不接触完整数据、密钥或文件系统。
 生成的代码随后交给独立沙箱执行，模型输出本身不构成可信执行边界。
@@ -16,8 +16,8 @@ import httpx
 import pandas as pd
 
 from app.config import Settings
-from app.core.exceptions import LLMServiceError
 from app.schemas.assistant import TimeRange
+from app.services.llm_provider import LLMProviderFactory, ResolvedProvider
 
 if TYPE_CHECKING:
     from app.services.table_catalog import TableDataset
@@ -338,70 +338,40 @@ def build_retry_feedback(error_message: str, attempt: int) -> str:
     )
 
 
-class DeepSeekCodeGenerator:
-    """DeepSeek Chat Completions 代码生成客户端。"""
+class LLMCodeGenerator:
+    """通过统一 Provider 客户端生成 Pandas 代码。"""
 
     def __init__(
         self,
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
+        provider_factory: LLMProviderFactory | None = None,
     ) -> None:
         self._settings = settings
-        self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.deepseek_timeout_seconds)
-        )
-        self._owns_client = client is None
-        self._endpoint = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
+        self._providers = provider_factory or LLMProviderFactory(settings, client=client)
+        self._owns_providers = provider_factory is None
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        if self._owns_providers:
+            await self._providers.aclose()
 
     async def complete(
         self,
         messages: list[dict[str, str]],
         *,
         timeout: float,
+        provider: ResolvedProvider | None = None,
     ) -> str:
-        """请求模型返回一段代码，网络和鉴权错误直接上抛为 502。"""
-        if not self._settings.deepseek_key:
-            raise LLMServiceError("未配置 DEEPSEEK_API_KEY，无法生成代码")
-
-        request_body = {
-            "model": self._settings.deepseek_model,
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": 1_600,
-            "stream": False,
-        }
-
-        try:
-            response = await self._client.post(
-                self._endpoint,
-                headers={
-                    "Authorization": f"Bearer {self._settings.deepseek_key}",
-                    "Content-Type": "application/json",
-                },
-                json=request_body,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            body = response.json()
-            content = body["choices"][0]["message"]["content"]
-        except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "DeepSeek 代码生成 HTTP 失败 status=%s",
-                exc.response.status_code,
-            )
-            raise LLMServiceError("DeepSeek 代码生成服务暂时不可用") from exc
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-            logger.warning("DeepSeek 代码生成响应异常: %s", type(exc).__name__)
-            raise LLMServiceError("DeepSeek 代码生成响应格式异常") from exc
-
-        if not isinstance(content, str) or not content.strip():
-            raise LLMServiceError("DeepSeek 未返回有效代码")
-        return content
+        """请求模型返回一段代码；鉴权失败返回 401，网络/上游异常返回 502。"""
+        resolved = provider or self._providers.resolve()
+        return await self._providers.chat(
+            resolved,
+            messages,
+            temperature=0.0,
+            max_tokens=1_600,
+            timeout=timeout,
+        )
 
 
 def _sample_value(column: str, value: Any) -> Any:
