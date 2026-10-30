@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -24,6 +25,7 @@ from app.core.logging import SecretRedactionFilter, redact_secrets
 from app.main import create_app
 from app.schemas.assistant import TimeRange
 from app.services.code_executor import CodeExecutionResult
+from app.services.code_generator import LLMCodeGenerator
 from app.services.deepseek_extractor import LLMTimeRangeExtractor
 from app.services.llm_provider import LLMProviderFactory
 from app.services.time_range import TimeExtraction
@@ -269,12 +271,12 @@ class _FakeExtractor:
         return None
 
 
-def _app(settings: Settings, factory: LLMProviderFactory | None = None, extractor=None):  # type: ignore[no-untyped-def]
+def _app(settings: Settings, factory: LLMProviderFactory | None = None, extractor=None, generator=None):  # type: ignore[no-untyped-def]
     return create_app(
         settings,
         extractor=extractor or _FakeExtractor(),  # type: ignore[arg-type]
         fetcher=_FakeFetcher(),  # type: ignore[arg-type]
-        code_generator=_FakeGenerator(),  # type: ignore[arg-type]
+        code_generator=generator or _FakeGenerator(),  # type: ignore[arg-type]
         code_executor=_FakeExecutor(),  # type: ignore[arg-type]
         provider_factory=factory,
     )
@@ -355,3 +357,83 @@ def test_success_response_exposes_llm_metadata() -> None:
         "key_source": "system",
     }
     assert "system-key" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "model_name"),
+    [
+        ("doubao", "doubao-seed-test"),
+        ("qwen", "qwen-max-test"),
+    ],
+)
+def test_api_accepts_doubao_and_qwen_success_responses(
+    provider_type: str,
+    model_name: str,
+) -> None:
+    """真实 Provider 成功后，parser.engine 等字段必须通过响应校验。
+
+    覆盖 P0：ParserInfo.engine 曾只允许 deepseek/rule_based，
+    豆包/千问成功返回时会在 FastAPI 响应序列化阶段报 500。
+    """
+    captured_models: list[str] = []
+    user_key = f"sk-{provider_type}-user-123456"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured_models.append(body["model"])
+        assert request.headers["Authorization"] == f"Bearer {user_key}"
+
+        if "response_format" in body:
+            # 第一次调用：时间解析。
+            content = json.dumps(
+                {
+                    "start_date": "2026-09-01",
+                    "end_date": "2026-09-30",
+                    "confidence": 0.95,
+                    "reason": f"{provider_type} mock 解析",
+                }
+            )
+        else:
+            # 第二次调用：生成 Pandas 代码。
+            content = "result_df = source_df.copy()"
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    http_client = _mock_client(handler)
+    settings = _settings()
+    factory = LLMProviderFactory(settings, client=http_client)
+    extractor = LLMTimeRangeExtractor(settings, provider_factory=factory)
+    generator = LLMCodeGenerator(settings, provider_factory=factory)
+    app = _app(
+        settings,
+        factory=factory,
+        extractor=extractor,
+        generator=generator,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/assistant/query/code",
+            json={
+                "message": "统计9月各项目工单量",
+                "provider_type": provider_type,
+                "user_api_key": user_key,
+                "model_name": model_name,
+            },
+        )
+    asyncio.run(http_client.aclose())
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # 时间解析与代码生成都复用同一个 Provider 与模型。
+    assert captured_models == [model_name, model_name]
+    assert body["parser"]["engine"] == provider_type
+    assert body["parser"]["model"] == model_name
+    assert body["meta"]["llm"] == {
+        "provider_type": provider_type,
+        "model": model_name,
+        "key_source": "user",
+    }
+    assert user_key not in response.text

@@ -87,7 +87,7 @@ class ReportSummary:
     """一段可直接写入 Word 的结论文案。"""
 
     text: str
-    engine: str  # deepseek | fallback
+    engine: str  # deepseek | doubao | qwen | fallback
 
 
 class LLMReportSummarizer:
@@ -348,7 +348,9 @@ class WordReportExporter:
         _add_body_paragraph(document, question or "—")
 
         _add_heading(document, "二、分析结论")
-        label = "AI 生成" if summary.engine == "deepseek" else "系统自动摘要"
+        # engine 为实际 Provider（deepseek/doubao/qwen）或 fallback；
+        # 只要不是本地兜底摘要，都应标记为 AI 生成。
+        label = "系统自动摘要" if summary.engine == "fallback" else "AI 生成"
         note = document.add_paragraph()
         note_run = note.add_run(f"以下结论由{label}，仅基于本次查询结果。")
         _style_run(note_run, size=9, color=_MUTED_COLOR)

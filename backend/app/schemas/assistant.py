@@ -7,6 +7,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# 时间解析引擎：已接入的 BYOK Provider 或本地规则。
+# 统一在此定义，避免 schema 与服务层各维护一份 Literal 导致取值漂移。
+ParserEngine = Literal["deepseek", "doubao", "qwen", "rule_based"]
+
 
 class AssistantQueryRequest(BaseModel):
     """自然语言查询请求。"""
@@ -60,7 +64,7 @@ class WorkOrderSummary(BaseModel):
 class ParserInfo(BaseModel):
     """时间范围解析元信息。"""
 
-    engine: Literal["deepseek", "rule_based"]
+    engine: ParserEngine
     model: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str = ""

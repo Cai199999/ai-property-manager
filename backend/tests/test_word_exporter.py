@@ -116,6 +116,45 @@ def test_export_builds_docx_with_all_sections(tmp_path: Path) -> None:
     assert media, "Word 报告应包含图表图片"
 
 
+@pytest.mark.parametrize("engine", ["deepseek", "doubao", "qwen"])
+def test_export_labels_all_ai_providers_as_ai_generated(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    """豆包/千问的结论不能被误标为“系统自动摘要”。"""
+    exporter = WordReportExporter(_settings(tmp_path))
+
+    exported = exporter.export(
+        question="统计各区域工单量",
+        columns=_columns(),
+        rows=_rows(),
+        chart_meta=_chart_meta(),
+        summary=ReportSummary(text="模型生成的结论。", engine=engine),
+    )
+
+    assert exported is not None
+    text = _document_text(Document(exported.path))
+    assert "AI 生成" in text
+    assert "系统自动摘要" not in text
+
+
+def test_export_labels_fallback_summary_as_system_generated(tmp_path: Path) -> None:
+    exporter = WordReportExporter(_settings(tmp_path))
+
+    exported = exporter.export(
+        question="统计各区域工单量",
+        columns=_columns(),
+        rows=_rows(),
+        chart_meta=_chart_meta(),
+        summary=ReportSummary(text="规则兜底结论。", engine="fallback"),
+    )
+
+    assert exported is not None
+    text = _document_text(Document(exported.path))
+    assert "系统自动摘要" in text
+    assert "AI 生成" not in text
+
+
 def test_export_skips_when_disabled_or_empty(tmp_path: Path) -> None:
     disabled = WordReportExporter(_settings(tmp_path, word_report_enabled=False))
     assert (
