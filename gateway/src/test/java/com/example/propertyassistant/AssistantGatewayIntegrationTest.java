@@ -647,4 +647,34 @@ class AssistantGatewayIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).contains("下载文件不存在或已过期");
     }
+
+    @Test
+    void servesBundledIndexPageAndFavicon() {
+        ResponseEntity<String> index = restTemplate.getForEntity("/", String.class);
+
+        assertThat(index.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(index.getBody()).contains("/api/v1/assistant");
+        assertThat(index.getBody()).contains("favicon.ico");
+
+        ResponseEntity<byte[]> favicon = restTemplate.getForEntity(
+                "/favicon.ico",
+                byte[].class
+        );
+
+        assertThat(favicon.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(favicon.getBody()).isNotEmpty();
+    }
+
+    @Test
+    void returnsNotFoundInsteadOfInternalErrorForMissingStaticResource() {
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "/assets/does-not-exist.js",
+                String.class
+        );
+
+        // 静态资源缺失必须是 404，不能被兜底处理器包装成 500。
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody() == null || response.getBody().isEmpty()
+                || !response.getBody().contains("GATEWAY_INTERNAL_ERROR")).isTrue();
+    }
 }

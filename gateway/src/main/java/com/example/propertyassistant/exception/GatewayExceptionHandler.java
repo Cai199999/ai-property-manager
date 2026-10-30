@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -175,6 +176,25 @@ public class GatewayExceptionHandler {
                 "DOWNLOAD_TOO_LARGE",
                 exception.getMessage()
         );
+    }
+
+    /**
+     * 静态资源不存在时返回 404，而不是让兜底处理器包装成 500。
+     *
+     * <p>浏览器会主动请求 {@code /favicon.ico} 等资源，缺失属于正常情况，
+     * 不应污染网关错误日志，也不应让前端误以为后端故障。</p>
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Void> handleResourceNotFound(
+            NoResourceFoundException exception,
+            HttpServletRequest request
+    ) {
+        log.debug(
+                "静态资源不存在 path={} requestId={}",
+                exception.getResourcePath(),
+                requestId(request, null)
+        );
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
     }
 
     @ExceptionHandler(Exception.class)
