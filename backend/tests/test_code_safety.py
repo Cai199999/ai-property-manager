@@ -56,13 +56,36 @@ def test_extract_rejects_ambiguous_result_blocks() -> None:
         "result_df = open('/etc/passwd').read()",
         "result_df = (1).__class__",
         "result_df = getattr(source_df, 'to_csv')",
-        "if True:\n    result_df = source_df.copy()",
+        "def build():\n    result_df = source_df.copy()",
         "result_df = source_df.copy()\nresult_df = result_df.eval('1+1')",
     ],
 )
 def test_validate_rejects_unsafe_or_missing_result(code: str) -> None:
     with pytest.raises(UnsafeCodeError):
         validate_generated_code(code, max_chars=2_000)
+
+
+def test_validate_accepts_result_in_module_level_branches() -> None:
+    """空数据保护常用 if/else、try/except，在模块级赋值应放行。"""
+    conditional = """
+if source_df.empty:
+    result_df = pd.DataFrame(columns=["项目名称", "工单量"])
+else:
+    result_df = source_df.groupby("项目名称", as_index=False).size()
+"""
+    try_block = """
+try:
+    result_df = source_df.head(10)
+except Exception:
+    result_df = pd.DataFrame()
+"""
+    with_block = """
+with pd.option_context("mode.copy_on_write", True):
+    result_df = source_df.copy()
+"""
+
+    for code in (conditional, try_block, with_block):
+        assert validate_generated_code(code, max_chars=2_000) is not None
 
 
 def test_validate_accepts_aggregation() -> None:

@@ -79,8 +79,8 @@ def test_infer_chart_meta_honours_explicit_chart_request() -> None:
     )
 
 
-def test_infer_chart_meta_ignores_pie_request_for_multiple_series() -> None:
-    """饼图无法表达多列数值，退回柱状图而不是画一张错误图表。"""
+def test_infer_chart_meta_uses_first_series_for_explicit_pie() -> None:
+    """用户显式要饼图时，取第一个数值列，而不是降级成柱状图。"""
     columns = [
         {"name": "所属区域", "dtype": "object"},
         {"name": "工单量", "dtype": "int64"},
@@ -90,8 +90,9 @@ def test_infer_chart_meta_ignores_pie_request_for_multiple_series() -> None:
 
     meta = infer_chart_meta(columns, rows, question="用饼图展示")
 
-    assert meta.type == "bar"
-    assert meta.y == ["工单量", "总金额"]
+    assert meta.type == "pie"
+    assert meta.y == ["工单量"]
+    assert [series.name for series in meta.series] == ["工单量"]
 
 
 def test_infer_chart_meta_falls_back_to_table_without_numeric_column() -> None:

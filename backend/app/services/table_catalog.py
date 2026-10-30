@@ -126,6 +126,8 @@ class TableCatalog:
         self._settings = settings
         self._directory = Path(settings.data_table_dir)
         self._cache: dict[Path, _CachedTable] = {}
+        # 文件内容哈希缓存：key 为绝对路径，value 为 (mtime_ns, size) -> md5。
+        self._hash_cache: dict[Path, tuple[tuple[int, int], str]] = {}
 
     @property
     def directory(self) -> Path:
@@ -134,6 +136,7 @@ class TableCatalog:
     def invalidate(self) -> None:
         """上传或删除文件后立即失效缓存。"""
         self._cache.clear()
+        self._hash_cache.clear()
 
     def scan(self) -> TableSnapshot:
         """扫描目录并返回当前所有表的元数据与 DataFrame。"""
@@ -150,6 +153,11 @@ class TableCatalog:
         warnings: list[str] = []
         manifest = _load_manifest(directory, warnings)
         upload_index = _load_upload_index(directory, warnings)
+        manifest_by_file = {
+            str(entry.get("file", "")).strip(): entry
+            for entry in manifest
+            if str(entry.get("file", "")).strip()
+        }
         files = _list_excel_files(
             directory,
             max_files=self._settings.table_max_files,
@@ -174,11 +182,14 @@ class TableCatalog:
                 continue
             parsed_by_file[path.name] = parsed
 
-        manifest_by_file = {
-            str(entry.get("file", "")).strip(): entry
-            for entry in manifest
-            if str(entry.get("file", "")).strip()
-        }
+        # 同一份 Excel 被重复上传/复制时，只保留一份参与后续分组与汇总，
+        # 否则同构表 concat 会把金额等可加指标成倍放大。
+        files = self._dedupe_duplicate_files(
+            files,
+            manifest_by_file=manifest_by_file,
+            upload_index=upload_index,
+            warnings=warnings,
+        )
 
         used_names: set[str] = set()
         datasets: list[TableDataset] = []
@@ -281,6 +292,83 @@ class TableCatalog:
         )
         self._cache[resolved] = _CachedTable(signature=signature, parsed=parsed)
         return parsed
+
+    def _md5_cached(self, path: Path) -> str:
+        """按 mtime + size 缓存文件 MD5，避免每次扫描都读整份 Excel。"""
+        resolved = path.resolve()
+        stat = resolved.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cached = self._hash_cache.get(resolved)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+
+        digest = hashlib.md5()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        value = digest.hexdigest()
+        self._hash_cache[resolved] = (signature, value)
+        return value
+
+    def _dedupe_duplicate_files(
+        self,
+        files: list[Path],
+        *,
+        manifest_by_file: dict[str, dict[str, Any]],
+        upload_index: dict[str, dict[str, Any]],
+        warnings: list[str],
+    ) -> list[Path]:
+        """按文件 MD5 去除重复表，只保留一份参与分析。
+
+        保留优先级：manifest 声明的原始文件 > 非上传件 > 字典序更小的文件名。
+        这样重复上传件不会进入同构表组，避免 concat 后金额翻倍。
+        """
+        by_digest: dict[str, list[Path]] = {}
+        kept_names: set[str] = set()
+
+        for path in files:
+            try:
+                digest = self._md5_cached(path)
+            except OSError as exc:
+                # 哈希失败无法判断重复，保守起见按独立表处理。
+                warnings.append(f"文件 {path.name} 无法计算内容哈希，按独立表处理: {exc}")
+                kept_names.add(path.name)
+                continue
+            by_digest.setdefault(digest, []).append(path)
+
+        for candidates in by_digest.values():
+            winner = min(
+                candidates,
+                key=lambda path: _duplicate_priority(
+                    path,
+                    manifest_by_file=manifest_by_file,
+                    upload_index=upload_index,
+                ),
+            )
+            kept_names.add(winner.name)
+            losers = [path.name for path in candidates if path.name != winner.name]
+            if losers:
+                warnings.append(f"文件 {'、'.join(losers)} 与 {winner.name} 内容相同，已跳过重复表")
+
+        return [path for path in files if path.name in kept_names]
+
+
+def _duplicate_priority(
+    path: Path,
+    *,
+    manifest_by_file: dict[str, dict[str, Any]],
+    upload_index: dict[str, dict[str, Any]],
+) -> tuple[int, int, str]:
+    """内容相同的候选文件中，越小越优先保留。
+
+    manifest 声明的原始文件优先于上传副本，其次是非上传件，最后按文件名
+    保证结果稳定可复现。
+    """
+    return (
+        0 if path.name in manifest_by_file else 1,
+        1 if path.name in upload_index else 0,
+        path.name.lower(),
+    )
 
 
 def read_table_file(
@@ -409,7 +497,9 @@ def _list_excel_files(
             continue
         files.append(resolved)
     if len(files) > max_files:
-        warnings.append(f"目录中 Excel 超过 {max_files} 个，仅扫描前 {max_files} 个")
+        message = f"目录中 Excel 超过 {max_files} 个，仅扫描前 {max_files} 个"
+        logger.warning("%s（可通过 TABLE_MAX_FILES 调整上限）", message)
+        warnings.append(message)
         files = files[:max_files]
     return files
 

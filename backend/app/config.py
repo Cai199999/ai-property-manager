@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # 多表目录：存在 Excel 时，代码查询优先使用目录中的多表数据。
     table_directory_enabled: bool = True
     data_table_dir: Path = Path(".runtime/rpa_downloads/tables")
-    table_max_files: int = Field(default=8, ge=1, le=50)
+    table_max_files: int = Field(default=50, ge=1, le=200)
     table_max_rows: int = Field(default=50_000, ge=1, le=500_000)
     table_max_columns: int = Field(default=100, ge=1, le=500)
     table_upload_max_bytes: int = Field(

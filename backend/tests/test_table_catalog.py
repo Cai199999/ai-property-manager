@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from openpyxl import load_workbook
+
 from app.config import Settings
 from app.services.mock_tables import generate_mock_tables
 from app.services.table_catalog import TableCatalog
@@ -15,6 +17,28 @@ def _settings(tmp_path: Path) -> Settings:
         table_max_rows=10_000,
         table_max_columns=100,
     )
+
+
+def test_catalog_deduplicates_identical_files(tmp_path: Path) -> None:
+    """内容完全相同的副本只能保留一份，否则同构表 concat 会放大金额。"""
+    generate_mock_tables(tmp_path)
+    source = tmp_path / "工单表_A区.xlsx"
+    (tmp_path / "upload_copy_work_orders.xlsx").write_bytes(source.read_bytes())
+
+    snapshot = TableCatalog(_settings(tmp_path)).scan()
+
+    assert {table.name for table in snapshot.tables} == {
+        "工单表_A区",
+        "工单表_B区",
+        "工单表_C区",
+    }
+    assert all("upload_copy" not in table.file_name for table in snapshot.tables)
+    assert any("内容相同" in warning for warning in snapshot.warnings)
+    assert snapshot.homogeneous_groups[0]["tables"] == [
+        "工单表_A区",
+        "工单表_B区",
+        "工单表_C区",
+    ]
 
 
 def test_catalog_detects_homogeneous_tables(tmp_path: Path) -> None:
@@ -55,7 +79,10 @@ def test_catalog_uses_upload_index_for_display_name(tmp_path: Path) -> None:
     summary = generate_mock_tables(tmp_path)
     source = tmp_path / "工单表_A区.xlsx"
     target = tmp_path / "upload_abc123_work_orders.xlsx"
-    target.write_bytes(source.read_bytes())
+    # 上传件必须是不同内容，否则会命中“重复文件去重”而保留 manifest 原始表。
+    book = load_workbook(source)
+    book.worksheets[0].cell(row=3, column=1).value = "UPLOAD-COPY-001"
+    book.save(target)
     (tmp_path / "upload_index.json").write_text(
         json.dumps({"upload_abc123_work_orders.xlsx": {"original_stem": "九月工单"}}),
         encoding="utf-8",

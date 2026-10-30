@@ -145,6 +145,9 @@ class CodeQueryAgent:
         messages = build_initial_messages(message, source.profile)
 
         warnings = list(extraction.warnings) + list(source.warnings)
+        sample_warning = _time_diff_sample_warning(source.frames, message)
+        if sample_warning:
+            warnings.append(sample_warning)
         warnings = _dedupe(warnings)
         retry_errors: list[str] = []
         attempts = 0
@@ -748,6 +751,45 @@ def _validate_range(time_range: TimeRange, settings: Settings) -> None:
                 "max_query_days": settings.max_query_days,
             },
         )
+
+
+_TIME_DIFF_KEYWORDS = (
+    "时长",
+    "耗时",
+    "时间差",
+    "间隔",
+    "完成时间",
+    "处理时间",
+    "多久",
+    "小时",
+    "分钟",
+)
+
+
+def _time_diff_sample_warning(frames: dict[str, pd.DataFrame], question: str) -> str | None:
+    """时间差类问题若完成时间缺失严重，提示指标样本覆盖不足。
+
+    只在用户询问时长/间隔等时间差指标时触发；完成时间缺失超过 20%
+    认为样本存在明显偏差，避免用户把局部均值当成全量结论。
+    """
+    if not any(keyword in question for keyword in _TIME_DIFF_KEYWORDS):
+        return None
+
+    seen: set[int] = set()
+    total = 0
+    completed = 0
+    for frame in frames.values():
+        if id(frame) in seen or "完成时间" not in frame.columns:
+            continue
+        seen.add(id(frame))
+        total += int(len(frame))
+        completed += int(pd.to_datetime(frame["完成时间"], errors="coerce").notna().sum())
+
+    if total == 0 or completed >= total:
+        return None
+    if (total - completed) / total < 0.2:
+        return None
+    return f"当前时间差指标仅基于已完成的 {completed} 条工单计算，存在样本缺失"
 
 
 def _dedupe(values: list[str]) -> list[str]:

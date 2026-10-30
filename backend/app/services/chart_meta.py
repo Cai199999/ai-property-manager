@@ -80,8 +80,11 @@ def infer_chart_meta(
         chart_type = "pie"
 
     requested = _requested_chart_type(question)
-    # 饼图只能表达单一数值列，多列时退回柱状图。
-    if requested and not (requested == "pie" and len(y_names) > 1):
+    if requested:
+        # 饼图只能表达单一数值列：用户显式要求饼图时，优先取第一个数值列
+        # （通常是数量/金额，占比列只是派生展示），而不是降级成柱状图。
+        if requested == "pie" and len(y_names) > 1:
+            y_names = y_names[:1]
         chart_type = requested
 
     series = [ChartSeries(name=name, key=name, unit=_infer_unit(name)) for name in y_names]

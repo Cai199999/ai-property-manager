@@ -214,7 +214,18 @@ def _contains_result_assignment(code: str) -> bool:
 
 
 def _has_top_level_result_assignment(tree: ast.Module) -> bool:
-    for node in tree.body:
+    """模块顶层或其控制流分支中给 result_df 赋值都算合法。
+
+    模型常用 ``if/else``、``try/except`` 兼容空数据，这些语句仍然在模块级
+    执行；只要存在一条能给 result_df 赋值的路径，就交给沙箱验证实际可运行性。
+    函数/类内部的赋值不算，因为模块执行完毕时未必存在 result_df。
+    """
+    return _assigns_result_in_block(tree.body)
+
+
+def _assigns_result_in_block(nodes: list[ast.stmt]) -> bool:
+    """递归检查模块级代码块及其中 if/try/with 分支的结果赋值。"""
+    for node in nodes:
         if isinstance(node, ast.Assign):
             if any(
                 isinstance(target, ast.Name) and target.id == _RESULT_NAME
@@ -224,7 +235,27 @@ def _has_top_level_result_assignment(tree: ast.Module) -> bool:
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and node.target.id == _RESULT_NAME:
                 return True
+        elif isinstance(node, ast.If):
+            if _assigns_result_in_block(node.body) or _assigns_result_in_block(node.orelse):
+                return True
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            if _assigns_result_in_block(node.body):
+                return True
+        elif _is_try_node(node):
+            blocks = [node.body, node.orelse, node.finalbody]
+            blocks.extend(handler.body for handler in node.handlers)
+            if any(_assigns_result_in_block(block) for block in blocks):
+                return True
     return False
+
+
+def _is_try_node(node: ast.stmt) -> bool:
+    """兼容 Python 3.11+ 的 ast.TryStar。"""
+    try_nodes: tuple[type, ...] = (ast.Try,)
+    try_star = getattr(ast, "TryStar", None)
+    if try_star is not None:
+        try_nodes = try_nodes + (try_star,)
+    return isinstance(node, try_nodes)
 
 
 def _is_dunder(name: str) -> bool:

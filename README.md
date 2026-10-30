@@ -419,7 +419,7 @@ PROPERTY_API_KEY=...
 | `RPA_DOWNLOAD_DIR` | `.runtime/rpa_downloads` | 模拟导出目录 |
 | `TABLE_DIRECTORY_ENABLED` | `true` | 是否启用多表目录 |
 | `DATA_TABLE_DIR` | `.runtime/rpa_downloads/tables` | 多表扫描目录 |
-| `TABLE_MAX_FILES` | `8` | 单次扫描最大表数 |
+| `TABLE_MAX_FILES` | `50` | 单次扫描最大表数（超出时记录 WARNING） |
 | `TABLE_UPLOAD_MAX_BYTES` | `20000000` | 单个上传文件上限 |
 | `TABLE_UPLOAD_MAX_FILES` | `10` | 单次请求最多上传文件数 |
 | `CODE_SANDBOX_MODE` | `bwrap` | 代码执行隔离模式，`disabled` 时拒绝执行 |
